@@ -11,11 +11,26 @@ impl Point {
     pub fn valid(&self) -> bool {
         return self.x >= 0 && self.x < 8 && self.y >= 0 && self.y < 8;
     }
+    pub fn to_index(&self) -> usize {
+        return (self.y * 8 + self.x) as usize;
+    }
+    pub fn from_index(index: usize) -> Point {
+        return Point {
+            x: (index % 8) as i32,
+            y: (index / 8) as i32
+        };
+    }
 }
 
 impl Default for Point {
     fn default() -> Self {
         return Self { x: 0, y: 0 };
+    }
+}
+
+impl std::fmt::Display for Point {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(f, "{:?}", self);
     }
 }
 impl std::fmt::Debug for Point {
@@ -45,11 +60,19 @@ impl std::ops::Mul<i32> for Point {
 }
 
 
+impl std::hash::Hash for Point {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.x.hash(state);
+        self.y.hash(state);
+    }
+}
+
 impl std::cmp::PartialEq<Point> for Point {
     fn eq(&self, other: &Point) -> bool {
         return self.x == other.x && self.y == other.y;
     }
 }
+impl std::cmp::Eq for Point {}
 
 impl Into<egui::Pos2> for Point {
     fn into(self) -> egui::Pos2 {

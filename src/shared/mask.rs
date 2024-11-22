@@ -1,6 +1,7 @@
-use std::u64;
 
-use crate::cutil::point::Point;
+
+use crate::shared::point::Point;
+
 
 #[derive(Clone,Copy)]
 pub struct Mask {
@@ -18,7 +19,6 @@ impl std::fmt::Debug for Mask {
         }
         return write!(f, "{str}");
     }
-
 }
 
 impl Default for Mask {
@@ -26,6 +26,7 @@ impl Default for Mask {
         return Mask { raw: 0u64 };
     }
 }
+
 impl std::ops::BitXor<Point> for Mask {
     type Output = Mask;
     fn bitxor(self, rhs: Point) -> Mask {
@@ -132,6 +133,7 @@ impl std::ops::BitAnd<Point> for Mask {
 }
 
 
+#[allow(dead_code)]
 impl Mask {
     pub fn shiftl(&mut self, n: i32){
         self.raw <<= n;
@@ -177,6 +179,68 @@ impl Mask {
         }
         return None;
     }
+
+    pub fn to_point_or_00(&self) -> String {
+        let point = self.to_point();
+        if let Some(p) = point {
+            return format!("{p}");
+        } else {
+            return "(,)".to_string();
+        }
+    }
+
+    pub fn str(&self) -> String {
+        let bv = &mut self.raw.to_ne_bytes();
+        let mut str = "\n".to_owned();
+        for byte in bv.iter() {
+            let x = byte.reverse_bits();
+            str.push_str(&format!("{x:08b}\n"));
+        }
+        return format!("{str}");
+    }
+
+    #[inline(always)]
+    pub fn bit_count(&self) -> i32 {
+        return self.raw.count_ones() as i32;
+    }
+
+    pub fn get_y_gap(m1: &Mask, m2: &Mask) -> usize {
+        let (mut from, mut to) = if m1.raw < m2.raw {
+            (m1.raw, m2.raw)
+        } else if m1.raw > m2.raw {
+            (m2.raw, m1.raw)
+        } else {
+            return 0;
+        };
+        let mut gap = 0usize;
+        return loop {
+            from <<= 8;
+            gap += 1;
+            if from > to {
+                break gap;
+            }
+            if gap > 8 { panic!("Y Gap > 8") };
+        };
+    }
+    pub fn get_x_gap(m1: &Mask, m2: &Mask) -> usize {
+        let (mut from, mut to) = if (m1.raw % 8) < (m2.raw % 8) {
+            (m1.raw, m2.raw)
+        } else if (m1.raw % 8) > (m2.raw % 8) {
+            (m2.raw, m1.raw)
+        } else {
+            return 0;
+        };
+        let mut gap = 0usize;
+        return loop {
+            from <<= 1;
+            gap += 1;
+            if from > to {
+                break gap;
+            }
+            if gap > 8 { panic!("X Gap > 8") };
+        };
+    }
+
     pub fn isolated_bits(&self) -> Vec<Mask> {
         let mut rv = Vec::new();
         let bv = &self.raw.to_ne_bytes();
@@ -192,7 +256,20 @@ impl Mask {
 
     }
 
+    pub fn center(m1: &Mask, m2: &Mask) -> Mask {
 
+    }
+    pub fn point_add(mask: &Mask, point: &Point) -> Mask {
+        let bv = &mut mask.raw.to_ne_bytes();
+        for (index, byte) in bv.iter().enumerate() {
+            for bit in 0..8 {
+                if byte & (1 << bit) != 0 {
+                    return Mask::from_point(Point { x: bit, y: index as i32 } + *point);
+                }
+            }
+        }
+        return Mask::default();
+    }
 
     pub fn from_point(point: Point) -> Mask {
         if point.x > 7 || point.y > 7 { return Mask::default() };
@@ -211,4 +288,39 @@ impl Mask {
         return mask;
     }
 
+    pub fn from_index(index: usize) -> Mask {
+        return Mask {
+            raw: (1u64 << (index) << (index % 8))
+        };
+    }
+    pub fn as_index(&self) -> usize {
+        let bv = &mut self.raw.to_ne_bytes();
+        for (index, byte) in bv.iter().enumerate() {
+            for bit in 0..8 {
+                if byte & (1 << bit) != 0 {
+                    return ((index * 8) + bit) as usize;
+                }
+            }
+        }
+        return 0usize;
+    }
+
+
+}
+
+impl PartialEq<u8> for Mask {
+    fn eq(&self, other: &u8) -> bool {
+        return self.bit_count() == 1 && (
+            (1u64 << (other) << (other % 8)) == self.raw
+        );
+        
+    }
+}
+impl PartialEq<usize> for Mask {
+    fn eq(&self, other: &usize) -> bool {
+        return self.bit_count() == 1 && (
+            (1u64 << (other) << (other % 8)) == self.raw
+        );
+        
+    }
 }
