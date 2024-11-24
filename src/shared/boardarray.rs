@@ -10,6 +10,8 @@ use crate::shared::{
     state::MaskSet
 };
 
+use super::chessbyte::{byte_is_kingside, byte_is_queenside};
+
 fn sliding_move(piece: u8, index: usize, _everyone_else: &[u8; 64], enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
     let index_mask = Mask::from_index(index);
     
@@ -122,12 +124,13 @@ fn king_move(_piece: u8, pos: usize, _everyone_else: &[u8; 64], enemy_mask: &Mas
             }
         }
     }
+
     return move_mask;
 }
 pub trait BoardArray {
-    fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> ([PieceCachedMoves; 64], Mask);
+    fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask, allowed_castles: u8) -> ([PieceCachedMoves; 64], Mask);
     fn generate_maskset(&self, ally_parity: Parity) -> MaskSet;
-    fn get_castles(&self, current_castle_byte: Option<u8>) -> u8;
+    fn get_castle_moves(&self, king_piece: u8, index: usize, allowed_castles: u8) -> u8;
     fn with_move(&self, from: Mask, to: Mask, enpassant: &Mask) -> Self;
     fn bit_xor(&self, other: &[u8; 64]) -> [u8; 64];
     fn any(&self) -> bool;
@@ -136,6 +139,8 @@ pub trait BoardArray {
     fn all_are(&self, are: PieceByte) -> bool;
     fn with_move_indexed(&self, from: usize, to: usize, enpassant: &Mask) -> Self;
     fn get_shallow_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask;
+    fn with_castle(&self, from: usize, to: usize) -> Self;
+    fn get_allowed_castles(&self, from: usize, current_castles: u8) -> u8;
 }
 impl std::ops::Index<Mask> for [u8; 64] {
     type Output = u8;
@@ -227,33 +232,51 @@ impl BoardArray for [u8; 64] {
         }
         return array;
     }
-    fn get_castles(&self, current_castle_byte: Option<u8>) -> u8 {
-        let mut castle_byte = current_castle_byte.unwrap_or(0b00001111u8);
-        for &byte in self.iter() {
-            if castle_byte == 0 { return castle_byte };
-            if byte.has_moved() {
-                if byte.get_ptype() == PieceByte::KING {
-                    castle_byte &= if byte.get_parity() == Parity::WHITE { 0b00001100u8 } else { 0b00000011u8 };
-                } else if byte.get_ptype() == PieceByte::ROOK {
-                    if byte.get_parity() == Parity::WHITE {
-                        if (castle_byte & 0b00000001) != 0 && byte.is_kingside() {
-                            castle_byte &= 0b11111110;
-                        }
-                        if (castle_byte & 0b00000010) != 0 && byte.is_queenside() {
-                            castle_byte &= 0b11111101;
-                        }
-                    } else {
-                        if (castle_byte & 0b00000100) != 0 && byte.is_kingside() {
-                            castle_byte &= 0b11111011;
-                        }
-                        if (castle_byte & 0b00001000) != 0 && byte.is_queenside() {
-                            castle_byte &= 0b11110111;
-                        }
-                    }
+    fn with_castle(&self, king: usize, rook: usize) -> Self {
+        let mut array = self.clone();
+        if rook > king {
+            array[king + 2] = array[king] | 0b1000_0000u8;
+            array[king] ^= array[king];
+            array[rook - 2] = array[rook] | 0b1000_0000u8;
+            array[rook] ^= array[rook];
+        } else {
+            array[king - 2] = array[king] | 0b1000_0000u8;
+            array[king] ^= array[king];
+            array[rook + 3] = array[rook] | 0b1000_0000u8;
+            array[rook] ^= array[rook];
+        }
+        return array;
+    }
+    fn get_allowed_castles(&self, from: usize, current_castles: u8) -> u8 {
+        let mut castles = current_castles;
+        if castles != 0 {
+            if self[from].get_ptype() == PieceByte::KING {
+                castles &= if self[from].get_parity() == Parity::WHITE { 0b0000_0011 } else { 0b0000_1100 };
+            } else if self[from].get_ptype() == PieceByte::ROOK {
+                if self[from].is_queenside() {
+                    castles &= if self[from].get_parity() == Parity::WHITE { 0b0000_0111 } else { 0b0000_1101 };
+                } else if self[from].is_kingside() {
+                    castles &= if self[from].get_parity() == Parity::WHITE { 0b0000_1011 } else { 0b0000_1110 };
                 }
             }
         }
-        return castle_byte;
+        return castles;
+    }
+    fn get_castle_moves(&self, king_piece: u8, index: usize, allowed_castles: u8) -> u8 {
+        let mut byte = 0b0000_0000u8;
+        if allowed_castles == 0 {
+            return byte;
+        }
+        let parity_castles = allowed_castles & if king_piece.get_parity() == Parity::WHITE { 0b0000_1100u8 } else { 0b0000_0011u8 };
+        if !king_piece.has_moved() && parity_castles != 0 {
+            if (parity_castles & 0b0000_0101u8) != 0 && self[index + 1] == 0 && self[index + 2] == 0 && self[index + 3].is_castleable(king_piece, byte_is_kingside) {
+                byte |= 0b0000_0001u8;
+            }
+            if (parity_castles & 0b0000_1010u8) != 0 && self[index - 1] == 0 && self[index - 2] == 0 && self[index - 3] == 0 && self[index - 4].is_castleable(king_piece, byte_is_queenside) {
+                byte |= 0b0000_0010u8;
+            }
+        }
+        return byte;
     }
     fn get_shallow_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask {
         let mut moves = Mask::default();
@@ -278,7 +301,7 @@ impl BoardArray for [u8; 64] {
         }
         return moves;
     }
-    fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> ([PieceCachedMoves; 64], Mask) { 
+    fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask, allowed_castles: u8) -> ([PieceCachedMoves; 64], Mask) { 
         let mut array: [PieceCachedMoves; 64] = [PieceCachedMoves::default(); 64];
         let mut shallow_m = Mask::default();
         for (index, &byte) in self.iter().enumerate() {
@@ -289,29 +312,25 @@ impl BoardArray for [u8; 64] {
                 PieceByte::ROOK | PieceByte::QUEEN | PieceByte::BISHOP => {
                     PieceCachedMoves {
                         moves: sliding_move(byte, index, self, &maskset.enemy, &maskset.piece),
-                        castles: 0u8,
-                        state: Mask::default()
+                        castles: 0u8
                     }
                 },
                 PieceByte::PAWN => {
                     PieceCachedMoves {
                         moves: pawn_move(byte, index, self, &maskset.enemy, &maskset.piece, enpassant),
-                        castles: 0u8,
-                        state: Mask::default()
+                        castles: 0u8
                     }
                 },
                 PieceByte::KNIGHT => {
                     PieceCachedMoves {
                         moves: knight_move(byte, index, self, &maskset.enemy, &maskset.piece),
-                        castles: 0u8,
-                        state: Mask::default()
+                        castles: 0u8
                     }
                 },
                 PieceByte::KING => {
                     PieceCachedMoves {
                         moves: king_move(byte, index, self, &maskset.enemy, &maskset.piece),
-                        castles: 0u8,
-                        state: Mask::default()
+                        castles: self.get_castle_moves(byte, index, allowed_castles)
                     }
                 }
             };

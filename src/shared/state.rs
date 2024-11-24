@@ -68,19 +68,19 @@ impl Default for State {
 impl State {
     #[inline(always)]
     pub fn white_kingside_can_castle(&self) -> bool {
-        return (self.castles & 0b00000001) != 0;
-    }
-    #[inline(always)]
-    pub fn white_queenside_can_castle(&self) -> bool {
-        return (self.castles & 0b00000010) != 0;
-    }
-    #[inline(always)]
-    pub fn black_kingside_can_castle(&self) -> bool {
         return (self.castles & 0b00000100) != 0;
     }
     #[inline(always)]
-    pub fn black_queenside_can_castle(&self) -> bool {
+    pub fn white_queenside_can_castle(&self) -> bool {
         return (self.castles & 0b00001000) != 0;
+    }
+    #[inline(always)]
+    pub fn black_kingside_can_castle(&self) -> bool {
+        return (self.castles & 0b00000001) != 0;
+    }
+    #[inline(always)]
+    pub fn black_queenside_can_castle(&self) -> bool {
+        return (self.castles & 0b00000010) != 0;
     }
     #[inline(always)]
     pub fn get_piece_at_index(&self, index: usize) -> u8 {
@@ -107,7 +107,7 @@ impl State {
     }
     pub fn grow(&mut self) {
         self.maskset = self.board.generate_maskset(self.turn);
-        (self.moves, self.shallow_m) = self.board.get_moves(self.turn, &self.maskset, &self.enpassant);
+        (self.moves, self.shallow_m) = self.board.get_moves(self.turn, &self.maskset, &self.enpassant, self.castles);
         let mut cloned = self.moves;
         for (index, cache) in cloned.iter_mut().enumerate() {
             if cache.moves.any() {
@@ -121,27 +121,34 @@ impl State {
                     }
                 }
             }
-        }
-        self.moves = cloned;
-        if self.castles != 0 {
-            for (index, piece) in self.board.iter().enumerate() {
-                if (piece & 0b10000000) != 0 {
-                    if piece.get_ptype() == PieceByte::KING {
-                        self.castles &= if piece.get_parity() == Parity::WHITE { 0b00000011 } else { 0b00001100 };
-                    } else if piece.get_ptype() == PieceByte::ROOK {
-                        if (index % 8) < 4 {
-                            self.castles &= if piece.get_parity() == Parity::WHITE { 0b00000111 } else { 0b00001101 };
-                        } else {
-                            self.castles &= if piece.get_parity() == Parity::WHITE { 0b00001011 } else { 0b00001110 };
-                        }
+            if cache.castles != 0 && (self.shallow_m & self.kings.0).none() {
+                if (cache.castles & 0b0000_0001) != 0 {
+                    let mut branch = self.castle_branch(index, index + 3);
+                    branch.shallow();
+                    if (branch.shallow_m & Mask::from_index(index + 1)).none() && (branch.shallow_m & Mask::from_index(index + 2)).none() {
+                        cache.castles &= 0b0000_0010;
+                        self.branches.push(Box::new(branch));
+                    }
+                }
+                if (cache.castles & 0b0000_0010) != 0 {
+                    let mut branch = self.castle_branch(index, index - 4);
+                    branch.shallow();
+                    if (branch.shallow_m & Mask::from_index(index - 1)).none() && (branch.shallow_m & Mask::from_index(index - 2)).none() {
+                        cache.castles &= 0b0000_0001;
+                        self.branches.push(Box::new(branch));
                     }
                 }
             }
         }
+        self.moves = cloned;
     }
 
     pub fn try_accept(&mut self, from: usize, to: usize) -> usize {
-        let potential = self.board.with_move_indexed(from, to, &self.enpassant);
+        let potential = if self.board[from].get_parity() == self.board[to].get_parity() && self.board[from].get_ptype() == PieceByte::KING && self.board[to].get_ptype() == PieceByte::ROOK {
+            self.board.with_castle(from, to)
+        } else {
+            self.board.with_move_indexed(from, to, &self.enpassant)
+        };
         for (index, branch) in self.branches.iter_mut().enumerate() {
             if branch.board == potential {
                 return index;
@@ -163,6 +170,30 @@ impl State {
         pretty_print_board(&self.board);
     }
 
+    pub fn castle_branch(&mut self, king: usize, rook: usize) -> Self {
+        let mut branch = State {
+            is_accepted_state: false,
+            turn: !self.turn,
+            previous_board: self.board,
+            halfmove_clock: 0,
+            fullmove_number: if self.turn == Parity::BLACK { self.fullmove_number + 1 } else { self.fullmove_number },
+            branches: Vec::new(),
+            castles: self.castles & if self.turn == Parity::WHITE { 0b0000_0011 } else { 0b0000_1100 },
+            enpassant: Mask::default(),
+            ..Default::default()
+        };
+        branch.board = self.board.with_castle(king, rook);
+        for (index, byte) in branch.board.iter().enumerate() {
+            if byte.get_ptype() == PieceByte::KING {
+                if byte.get_parity() == branch.turn {
+                    branch.kings.0 = Mask::from_index(index);
+                } else {
+                    branch.kings.1 = Mask::from_index(index);
+                }
+            }
+        }
+        return branch;
+    }
     pub fn branch(&mut self, from: Mask, to: Mask) -> Self {
         let piece_from = &self.board[from];
         let ptype_from = piece_from.get_ptype();
@@ -173,7 +204,7 @@ impl State {
             halfmove_clock: if ptype_from == PieceByte::PAWN { self.halfmove_clock + 1 } else { 0 },
             fullmove_number: if self.turn == Parity::BLACK { self.fullmove_number + 1 } else { self.fullmove_number },
             branches: Vec::new(),
-            castles: self.castles,
+            castles: self.board.get_allowed_castles(from.as_index(), self.castles),
             ..Default::default()
         };
         if ptype_from == PieceByte::PAWN {
@@ -187,14 +218,6 @@ impl State {
                 if from.raw >> 16 == to.raw {
                     branch.enpassant = Mask { raw: from.raw >> 8 };
                 }
-            }
-        } else if ptype_from == PieceByte::KING {
-            branch.castles &= if self.turn == Parity::WHITE { 0b0000_0011 } else { 0b0000_1100 };
-        } else if ptype_from == PieceByte::ROOK {
-            if self.board[from].is_kingside() {
-                branch.castles &= if self.turn == Parity::WHITE { 0b0000_1101 } else { 0b0000_0111 };
-            } else if self.board[from].is_queenside() {
-                branch.castles &= if self.turn == Parity::WHITE { 0b0000_0010 } else { 0b0000_1011 };
             }
         }
 

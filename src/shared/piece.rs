@@ -132,7 +132,6 @@ pub fn parity_to_string(parity: Parity) -> &'static str {
 #[derive(Clone, Copy)]
 pub struct PieceCachedMoves {
     pub moves: Mask,
-    pub state: Mask,
     pub castles: u8
 }
 impl std::ops::IndexMut<Point> for [PieceCachedMoves] {
@@ -151,7 +150,6 @@ impl Default for PieceCachedMoves {
     fn default() -> Self {
         return PieceCachedMoves {
             moves: Mask::default(),
-            state: Mask::default(),
             castles: 0u8
         };
     }

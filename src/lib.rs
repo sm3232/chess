@@ -8,7 +8,7 @@ use std::rc::Rc;
 use std::thread;
 use std::time::Duration;
 
-use cutil::draw::{BLACK_COLOR_VALUE, MID_COLOR_VALUE, WHITE_COLOR_VALUE};
+use cutil::draw::MID_COLOR_VALUE;
 use eframe::egui::{self, Color32, Painter};
 use shared::point::Point;
 use std::sync::mpsc;

@@ -9,6 +9,7 @@ pub trait ChessByte {
     fn is_queenside(&self) -> bool;
     fn is_sided(&self) -> bool;
     fn to_letter(&self) -> char;
+    fn is_castleable(&self, king_byte: u8, side_check: fn(&u8) -> bool) -> bool;
 }
 
 
@@ -57,4 +58,14 @@ impl ChessByte for u8 {
     fn is_sided(&self) -> bool {
         return (self & 0b01100000u8) != 0;
     }
+    fn is_castleable(&self, king_byte: u8, side_check: fn(&u8) -> bool) -> bool {
+        return self.get_ptype() == PieceByte::ROOK && !self.has_moved() && self.get_parity() == king_byte.get_parity() && side_check(self);
+    }
+}
+pub fn byte_is_kingside(byte: &u8) -> bool {
+    return (byte & 0b0010_0000u8) != 0;
+
+}
+pub fn byte_is_queenside(byte: &u8) -> bool {
+    return (byte & 0b0100_0000u8) != 0;
 }

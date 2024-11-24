@@ -4,12 +4,13 @@ use final_1::ChessApp;
 use final_1::player::Player;
 use final_1::shared::mask::Mask;
 
-const FENS: [&str; 5] = [
+const FENS: [&str; 6] = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Default
     "rnbqkbnr/8/8/8/8/8/8/RNBQKBNR w KQkq - 0 1", // No Pawns
     "r/8/8/8/8/8/8/R w KQkq - 0 1", // Just rooks,
     "r4k/8/8/8/8/8/8/R4K w KQkq - 0 1", // Check,
     "r4k/8/8/8/8/8/8/RR4K w KQkq - 0 1", // Check,
+    "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1", //Castling 
     
 ];
 
@@ -64,7 +65,7 @@ fn main() -> () {
                         cc,
                         PLAYING_AREA,
                         WINDOW_SIZE[0] - PLAYING_AREA,
-                        FENS[4],
+                        FENS[5],
                         None,
                         None
             )))
