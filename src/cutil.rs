@@ -9,10 +9,11 @@ pub mod draw {
 
 
     pub const BOARD_SIZE: i32 = 8;
-    const WVAL: u8 = 128;
-    const BVAL: u8 = 88;
-    pub const BOARD_W_COLOR: egui::Color32 = egui::Color32::from_rgb(WVAL, WVAL, WVAL);
-    pub const BOARD_B_COLOR: egui::Color32 = egui::Color32::from_rgb(BVAL, BVAL, BVAL);
+    pub const WHITE_COLOR_VALUE: u8 = 128;
+    pub const BLACK_COLOR_VALUE: u8 = 88;
+    pub const MID_COLOR_VALUE: u8 = (WHITE_COLOR_VALUE + BLACK_COLOR_VALUE) / 2;
+    pub const BOARD_W_COLOR: egui::Color32 = egui::Color32::from_rgb(WHITE_COLOR_VALUE, WHITE_COLOR_VALUE, WHITE_COLOR_VALUE);
+    pub const BOARD_B_COLOR: egui::Color32 = egui::Color32::from_rgb(BLACK_COLOR_VALUE, BLACK_COLOR_VALUE, BLACK_COLOR_VALUE);
 
     pub fn draw_board (painter: &Painter) -> f32 {
         let sqmin = painter.clip_rect().width().min(painter.clip_rect().height());

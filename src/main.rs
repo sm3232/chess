@@ -52,7 +52,7 @@ fn main() -> () {
         parity: Parity::BLACK
     };
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW_SIZE),
+        viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW_SIZE).with_position([0.0, 0.0]),
         ..Default::default()
     };
     let finish = eframe::run_native(
@@ -63,6 +63,7 @@ fn main() -> () {
             Ok(Box::new(ChessApp::new(
                         cc,
                         PLAYING_AREA,
+                        WINDOW_SIZE[0] - PLAYING_AREA,
                         FENS[4],
                         None,
                         None

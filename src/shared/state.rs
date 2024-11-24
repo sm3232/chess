@@ -188,7 +188,16 @@ impl State {
                     branch.enpassant = Mask { raw: from.raw >> 8 };
                 }
             }
+        } else if ptype_from == PieceByte::KING {
+            branch.castles &= if self.turn == Parity::WHITE { 0b0000_0011 } else { 0b0000_1100 };
+        } else if ptype_from == PieceByte::ROOK {
+            if self.board[from].is_kingside() {
+                branch.castles &= if self.turn == Parity::WHITE { 0b0000_1101 } else { 0b0000_0111 };
+            } else if self.board[from].is_queenside() {
+                branch.castles &= if self.turn == Parity::WHITE { 0b0000_0010 } else { 0b0000_1011 };
+            }
         }
+
         branch.board = self.board.with_move(from, to, &self.enpassant);
         for (index, byte) in branch.board.iter().enumerate() {
             if byte.get_ptype() == PieceByte::KING {
