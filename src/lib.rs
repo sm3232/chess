@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use eframe::egui::{self, Color32, Painter};
+use shared::point::Point;
 use std::sync::mpsc;
 use player::Player;
 use crate::cutil::draw;
@@ -48,11 +49,38 @@ fn update_loop(frame: egui::Context, rx: mpsc::Receiver<()>) {
     }
 }
 
+struct Input {
+    wants_escape: bool,
+    left: bool,
+#[allow(dead_code)]
+    right: bool,
+    pos: Option<Point>
+}
+impl Input {
+    pub fn from_tuple(tuple: (bool, bool, bool, Option<egui::Pos2>)) -> Input {
+        let mut po: Option<Point> = None;
+        if let Some(p) = tuple.3 {
+            po = Some((p / (600.0 / 8.0)).into());
+        }
+        return Input {
+            wants_escape: tuple.0,
+            left: tuple.1,
+            right: tuple.2,
+            pos: po
+        };
+    }
+}
+
+fn collect_input(ctx: &egui::Context) -> Input {
+    return Input::from_tuple(ctx.input(|i| (i.key_down(egui::Key::Escape), i.pointer.primary_pressed(), i.pointer.secondary_clicked(), i.pointer.latest_pos())));
+
+}
+
 impl eframe::App for ChessApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        self.skip_update = !self.skip_update;
         if self.game.game_over { let _ = self.tx.send(()); }
-        if ctx.input(|input| input.key_pressed(egui::Key::Escape)) {
+        let input = collect_input(ctx);
+        if input.wants_escape {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
         let game_rect = egui::Rect {
@@ -72,10 +100,8 @@ impl eframe::App for ChessApp {
                     if !self.game.poll_players() {
                         if self.game.human_player != Parity::NONE {
                             if self.game.human_player == self.game.state.turn || self.game.human_player == Parity::BOTH {
-                                if game_response.is_pointer_button_down_on() {
-                                    let pos = game_response.interact_pointer_pos().unwrap();
-                                    let factor = game_rect.width() / 8.0;
-                                    self.game.human_input((pos / factor).into(), self.game.human_player);
+                                if input.left {
+                                    self.game.human_input(input.pos.unwrap(), self.game.human_player);
                                 }
                             }
                         }

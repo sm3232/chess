@@ -1,8 +1,6 @@
 
 
 use crate::shared::point::Point;
-
-
 #[derive(Clone,Copy)]
 pub struct Mask {
     pub raw: u64
@@ -11,7 +9,7 @@ pub struct Mask {
 
 impl std::fmt::Debug for Mask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bv = &mut self.raw.to_ne_bytes();
+        let bv = &mut self.raw.to_le_bytes();
         let mut str = "\n".to_owned();
         for byte in bv.iter() {
             let x = byte.reverse_bits();
@@ -180,6 +178,13 @@ impl Mask {
         return None;
     }
 
+    pub fn to_painter_rect(&self, sqsize: f32) -> eframe::egui::Rect {
+        return eframe::egui::Rect {
+            min: (self.to_point().unwrap_or(Point { x: -100, y: -100 }) * sqsize).into(),
+            max: ((self.to_point().unwrap_or(Point { x: -100, y: -100 }) + Point { x: 1, y: 1 }) * sqsize).into()
+        };
+    }
+
     pub fn to_point_or_00(&self) -> String {
         let point = self.to_point();
         if let Some(p) = point {
@@ -204,26 +209,26 @@ impl Mask {
         return self.raw.count_ones() as i32;
     }
 
-    pub fn get_y_gap(m1: &Mask, m2: &Mask) -> usize {
-        let (mut from, mut to) = if m1.raw < m2.raw {
-            (m1.raw, m2.raw)
+    pub fn get_y_gap<'a>(m1: &'a Mask, m2: &'a Mask) -> (usize, &'a Mask) {
+        let (mut from, to, low) = if m1.raw < m2.raw {
+            (m1.raw, m2.raw, m1)
         } else if m1.raw > m2.raw {
-            (m2.raw, m1.raw)
+            (m2.raw, m1.raw, m2)
         } else {
-            return 0;
+            return (0, m1);
         };
         let mut gap = 0usize;
         return loop {
             from <<= 8;
             gap += 1;
             if from > to {
-                break gap;
+                break (gap, low);
             }
             if gap > 8 { panic!("Y Gap > 8") };
         };
     }
     pub fn get_x_gap(m1: &Mask, m2: &Mask) -> usize {
-        let (mut from, mut to) = if (m1.raw % 8) < (m2.raw % 8) {
+        let (mut from, to) = if (m1.raw % 8) < (m2.raw % 8) {
             (m1.raw, m2.raw)
         } else if (m1.raw % 8) > (m2.raw % 8) {
             (m2.raw, m1.raw)
@@ -256,9 +261,6 @@ impl Mask {
 
     }
 
-    pub fn center(m1: &Mask, m2: &Mask) -> Mask {
-
-    }
     pub fn point_add(mask: &Mask, point: &Point) -> Mask {
         let bv = &mut mask.raw.to_ne_bytes();
         for (index, byte) in bv.iter().enumerate() {
@@ -272,7 +274,7 @@ impl Mask {
     }
 
     pub fn from_point(point: Point) -> Mask {
-        if point.x > 7 || point.y > 7 { return Mask::default() };
+        if point.x > 7 || point.y > 7 || point.x < 0 || point.y < 0 { return Mask::default() };
         let mut mask = Mask { raw: 1u64 };
             mask.shiftl(8 * (point.y));
             mask.shiftl(1 * (point.x));
@@ -290,7 +292,7 @@ impl Mask {
 
     pub fn from_index(index: usize) -> Mask {
         return Mask {
-            raw: (1u64 << (index) << (index % 8))
+            raw: (1u64 << index)
         };
     }
     pub fn as_index(&self) -> usize {
@@ -298,7 +300,7 @@ impl Mask {
         for (index, byte) in bv.iter().enumerate() {
             for bit in 0..8 {
                 if byte & (1 << bit) != 0 {
-                    return ((index * 8) + bit) as usize;
+                    return (index * 8 + bit) as usize;
                 }
             }
         }
@@ -311,7 +313,7 @@ impl Mask {
 impl PartialEq<u8> for Mask {
     fn eq(&self, other: &u8) -> bool {
         return self.bit_count() == 1 && (
-            (1u64 << (other) << (other % 8)) == self.raw
+            (1u64 << other ) == self.raw
         );
         
     }
@@ -319,7 +321,7 @@ impl PartialEq<u8> for Mask {
 impl PartialEq<usize> for Mask {
     fn eq(&self, other: &usize) -> bool {
         return self.bit_count() == 1 && (
-            (1u64 << (other) << (other % 8)) == self.raw
+            (1u64 << other) == self.raw
         );
         
     }

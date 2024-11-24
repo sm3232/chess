@@ -45,6 +45,12 @@ impl std::ops::Add<Point> for Point {
         return Point { x: self.x + rhs.x, y: self.y + rhs.y };
     }
 }
+impl std::ops::Sub<Point> for Point {
+    type Output = Self;
+    fn sub(self, rhs: Point) -> Self::Output {
+        return Point { x: self.x - rhs.x, y: self.y - rhs.y };
+    }
+}
 
 impl std::ops::Mul<f32> for Point {
     type Output = Self;

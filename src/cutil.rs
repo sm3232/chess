@@ -1,9 +1,12 @@
 pub mod draw {
     use eframe::egui::{self, Painter};
-    use crate::shared::state::ChessByte;
     use crate::game;
-    use crate::shared::piece::Parity;
-    use crate::shared::point::Point;
+    use crate::shared::{
+        piece::Parity,
+        point::Point,
+        chessbyte::ChessByte
+    };
+
 
     pub const BOARD_SIZE: i32 = 8;
     const WVAL: u8 = 128;
@@ -54,69 +57,20 @@ pub mod draw {
                 min: (Point::from_index(game.selected) * sqsize).into(),
                 max: ((Point::from_index(game.selected) + Point { x: 1, y: 1 }) * sqsize).into()
             }, egui::Color32::GREEN, "SELECTED");
-        }
-        /*
-        match &game.selected {
-            Some(piece) => {
-                painter.debug_rect(egui::Rect {
-                    min: (piece.borrow().get_props().pos * sqsize).into(), 
-                    max: ((piece.borrow().get_props().pos + point(1, 1)) * sqsize).into(),
+            let cached_moves = game.state.moves[game.selected];
 
-                }, egui::Color32::GREEN, "SELECTED");
+            for &m in cached_moves.moves.to_point_vector().iter() {
+                painter.debug_rect(egui::Rect {
+                    min: (m * sqsize).into(),
+                    max: ((m + Point { x: 1, y: 1 }) * sqsize).into(),
+                }, egui::Color32::LIGHT_GREEN, "MOVE");
+            }
+        } else {
+            for cm in game.state.threats.iter() {
+                painter.debug_rect(cm.moves.to_painter_rect(sqsize), egui::Color32::YELLOW, "THREAT");
+            }
 
-                let moves_option = game.cached_moves[piece.borrow().get_props().pos];
-                if moves_option.moves.any() {
-                    for &m in moves_option.moves.to_point_vector().iter() {
-                        painter.debug_rect(egui::Rect {
-                            min: (m * sqsize).into(),
-                            max: ((m + point(1, 1)) * sqsize).into(),
-                        }, egui::Color32::LIGHT_GREEN, "MOVE");
-                    }
-                    if piece.borrow().get_props().ptype == PieceByte::KING {
-                        let bits = if game.turn == Parity::WHITE { game.castle_moves & 0b00000011 } else { (game.castle_moves & 0b00001100) >> 2 };
-                        let pos = piece.borrow().get_props().pos;
-                        if (bits & 0b00000001) != 0 {
-                            painter.debug_rect(egui::Rect {
-                                min: (Point {x: pos.x + 3, y: pos.y} * sqsize).into(),
-                                max: ((Point {x: pos.x + 3, y: pos.y} + point(1, 1)) * sqsize).into()
-                            }, egui::Color32::LIGHT_GREEN, "CASTLE");
-                        }
-                        if (bits & 0b00000010) != 0 {
-                            painter.debug_rect(egui::Rect {
-                                min: (Point {x: pos.x - 4, y: pos.y} * sqsize).into(),
-                                max: ((Point {x: pos.x - 4, y: pos.y} + point(1, 1)) * sqsize).into()
-                            }, egui::Color32::LIGHT_GREEN, "CASTLE");
-                        }
-                    }
-                }
-            },
-            None => ()
         }
-        match game.enpassant {
-            Some(enpassant) => {
-                painter.debug_rect(egui::Rect {
-                    min: (enpassant * sqsize).into(),
-                    max: ((enpassant + point(1, 1)) * sqsize).into(),
-                }, egui::Color32::YELLOW, "ENPASSANT\nSQUARE");
-            },
-            None => ()
-        }
-        match &game.enpassant_piece {
-            Some(enpassant_piece) => {
-                painter.debug_rect(egui::Rect {
-                    min: (enpassant_piece.borrow().get_props().pos * sqsize).into(),
-                    max: ((enpassant_piece.borrow().get_props().pos + point(1, 1)) * sqsize).into(),
-                }, egui::Color32::BLUE, "ENPASSANT\nTARGET");
-            },
-            None => ()
-        }
-        for &ts in game.threatened_squares.to_point_vector().iter() {
-            painter.debug_rect(egui::Rect {
-                min: (ts * sqsize).into(),
-                max: ((ts + point(1, 1)) * sqsize).into(),
-            }, egui::Color32::LIGHT_RED, "THREAT");
-        }
-        */
     }
 
     pub fn draw_all(game: &mut game::ChessGame, ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter) -> () {
@@ -136,7 +90,9 @@ pub mod pretty_print {
     use stanza::renderer::Renderer;
     use stanza::style::{ HAlign, MaxWidth, MinWidth, Styles};
     use stanza::table::{ Col, Row, Table};
+    use crate::shared::chessbyte::ChessByte;
     use crate::shared::mask::Mask;
+    use crate::shared::piece::PieceCachedMoves;
 
     #[allow(dead_code)]
     /*
@@ -156,6 +112,24 @@ pub mod pretty_print {
         })).into();
     }
     */
+    fn board_to_table(b: &[u8; 64]) -> stanza::table::Table {
+        return Table::with_styles(
+            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
+        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
+            let mut cells = Vec::<char>::new();
+            for col in 0..8 {
+                cells.push(b[i * 8 + col].to_letter());
+            }
+            return Row::from(cells);
+        })).into()
+    }
+    fn moveset_to_table(m: &[PieceCachedMoves; 64]) -> stanza::table::Table {
+        let mut mask = Mask::default();
+        for pcm in m.iter() {
+            mask |= pcm.moves;
+        }
+        return mask_to_table(&mask);
+    }
     #[allow(dead_code)]
     fn mask_to_table(m: &Mask) -> stanza::table::Table {
         let bv = &mut m.raw.to_ne_bytes();
@@ -213,5 +187,11 @@ pub mod pretty_print {
 
     pub fn pretty_print_mask(mask: &Mask) -> () {
         println!("{}", Console::default().render(&mask_to_table(mask)));
+    }
+    pub fn pretty_print_moveset(moveset: &[PieceCachedMoves; 64]) -> () {
+        println!("{}", Console::default().render(&moveset_to_table(moveset)));
+    }
+    pub fn pretty_print_board(board: &[u8; 64]) -> () {
+        println!("{}", Console::default().render(&board_to_table(board)));
     }
 }

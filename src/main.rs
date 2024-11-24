@@ -1,20 +1,16 @@
-use std::sync::mpsc;
-use std::time::Duration;
-use std::{cell::RefCell, collections::HashMap, rc::Rc, thread};
-use by_address::ByAddress;
 use eframe::egui;
 use final_1::shared::piece::Parity;
 use final_1::ChessApp;
 use final_1::player::Player;
-use final_1::shared::{mask::Mask, piece::PieceCachedMoves};
+use final_1::shared::mask::Mask;
 
-const FENS: [&str; 6] = [
-    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
-    "r3k2r/pppppppp/8/8/8/8/PPPPPPPP/R3K2R w KQkq - 0 1",
-    "r/8/8/8/8/8/8/R w KQkq - 0 1",
-    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq a4 0 1",
-    "8/8/3k2r1/8/8/2RR1K2/3B4/8 w - - 0 1",
-    "6k1/8/8/8/3r4/8/2r5/5K2 w - - 0 1"
+const FENS: [&str; 5] = [
+    "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Default
+    "rnbqkbnr/8/8/8/8/8/8/RNBQKBNR w KQkq - 0 1", // No Pawns
+    "r/8/8/8/8/8/8/R w KQkq - 0 1", // Just rooks,
+    "r4k/8/8/8/8/8/8/R4K w KQkq - 0 1", // Check,
+    "r4k/8/8/8/8/8/8/RR4K w KQkq - 0 1", // Check,
+    
 ];
 
 const WINDOW_SIZE: [f32; 2] = [900.0, 600.0];
@@ -67,7 +63,7 @@ fn main() -> () {
             Ok(Box::new(ChessApp::new(
                         cc,
                         PLAYING_AREA,
-                        FENS[0],
+                        FENS[4],
                         None,
                         None
             )))

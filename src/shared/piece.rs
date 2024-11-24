@@ -114,6 +114,16 @@ impl std::fmt::Display for PieceByte {
         return write!(f, "{:?}", self);
     }
 }
+impl std::fmt::Display for Parity {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return match self {
+            Parity::WHITE => write!(f, "White"),
+            Parity::BLACK => write!(f, "Black"),
+            Parity::BOTH => write!(f, "Both"),
+            Parity::NONE => write!(f, "None")
+        };
+    }
+}
 
 pub fn parity_to_string(parity: Parity) -> &'static str {
     if parity == Parity::WHITE { return "WHITE" } else { return "BLACK" };

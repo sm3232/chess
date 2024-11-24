@@ -1,24 +1,29 @@
-use crate::{player::Player, shared::{
-    mask::Mask, piece::{
-        Parity, PieceByte, PieceCachedMoves
-    }, point::{
-        algebraic_to_point, Point
-    }, state::{ChessByte, State}
-}};
+use crate::Player;
+use crate::shared::{
+    chessbyte::ChessByte, 
+    mask::Mask, 
+    piece::{
+        Parity, 
+        PieceByte
+    }, 
+    point::{
+        algebraic_to_point, 
+        Point
+    }, 
+    state::State
+
+};
 use std::rc::Rc;
 
 
 
 pub struct ChessGame {
     pub selected: usize,
-    pub state: State,
+    pub state: Box<State>,
     pub game_over: bool,
     pub players: (Option<Rc<dyn Player>>, Option<Rc<dyn Player>>),
     pub human_player: Parity,
-    white_kingside_mask: Mask,
-    white_queenside_mask: Mask,
-    black_kingside_mask: Mask,
-    black_queenside_mask: Mask
+    pub state_history: Vec<Box<State>>
 }
 
 fn get_king_or_queenside(index: usize) -> u8 {
@@ -29,12 +34,9 @@ impl ChessGame {
     pub fn init(fen: String, player_white: Option<Rc<dyn Player>>, player_black: Option<Rc<dyn Player>>) -> ChessGame {
         let mut cg = ChessGame {
             selected: 65,
-            state: State::default(),
+            state: Box::new(State::default()),
+            state_history: Vec::new(),
             game_over: false,
-            white_kingside_mask: Mask::from_point(Point { x: 4, y: 0 }) | Mask::from_point(Point { x: 5, y: 0 }) | Mask::from_point(Point { x: 6, y: 0 }),
-            white_queenside_mask: Mask::from_point(Point { x: 2, y: 0 }) | Mask::from_point(Point { x: 3, y: 0 }) | Mask::from_point(Point { x: 4, y: 0 }),
-            black_kingside_mask: Mask::from_point(Point { x: 4, y: 7 }) | Mask::from_point(Point { x: 5, y: 7 }) | Mask::from_point(Point { x: 6, y: 7 }),
-            black_queenside_mask: Mask::from_point(Point { x: 2, y: 7 }) | Mask::from_point(Point { x: 3, y: 7 }) | Mask::from_point(Point { x: 4, y: 7 }),
             human_player: Parity::NONE,
             players: (player_white, player_black),
         };
@@ -48,6 +50,8 @@ impl ChessGame {
 
         let mut b_index: usize = 0;
         let mut index = 0;
+        let mut black_king_index = 65usize;
+        let mut white_king_index = 65usize;
         for (i, c) in fen.chars().enumerate() {
             index = i;
             if c == ' ' { 
@@ -58,23 +62,28 @@ impl ChessGame {
                 b_index += (c as i32 - '0' as i32) as usize;
             } else {
                 match c {
-                    'r' => cg.state.board[b_index] = Parity::WHITE | PieceByte::ROOK | get_king_or_queenside(b_index),
-                    'R' => cg.state.board[b_index] = Parity::BLACK | PieceByte::ROOK | get_king_or_queenside(b_index),
+                    'r' => cg.state.board[b_index] = Parity::BLACK | PieceByte::ROOK | get_king_or_queenside(b_index),
+                    'R' => cg.state.board[b_index] = Parity::WHITE | PieceByte::ROOK | get_king_or_queenside(b_index),
 
-                    'n' => cg.state.board[b_index] = Parity::WHITE | PieceByte::KNIGHT | get_king_or_queenside(b_index),
-                    'N' => cg.state.board[b_index] = Parity::BLACK | PieceByte::KNIGHT | get_king_or_queenside(b_index),
+                    'n' => cg.state.board[b_index] = Parity::BLACK | PieceByte::KNIGHT | get_king_or_queenside(b_index),
+                    'N' => cg.state.board[b_index] = Parity::WHITE | PieceByte::KNIGHT | get_king_or_queenside(b_index),
                     
-                    'b' => cg.state.board[b_index] = Parity::WHITE | PieceByte::BISHOP | get_king_or_queenside(b_index),
-                    'B' => cg.state.board[b_index] = Parity::BLACK | PieceByte::BISHOP | get_king_or_queenside(b_index),
+                    'b' => cg.state.board[b_index] = Parity::BLACK | PieceByte::BISHOP | get_king_or_queenside(b_index),
+                    'B' => cg.state.board[b_index] = Parity::WHITE | PieceByte::BISHOP | get_king_or_queenside(b_index),
                     
-                    'q' => cg.state.board[b_index] = Parity::WHITE | PieceByte::QUEEN | get_king_or_queenside(b_index),
-                    'Q' => cg.state.board[b_index] = Parity::BLACK | PieceByte::QUEEN | get_king_or_queenside(b_index),
+                    'q' => cg.state.board[b_index] = Parity::BLACK | PieceByte::QUEEN | get_king_or_queenside(b_index),
+                    'Q' => cg.state.board[b_index] = Parity::WHITE | PieceByte::QUEEN | get_king_or_queenside(b_index),
                     
-                    'k' => cg.state.board[b_index] = Parity::WHITE | PieceByte::KING | get_king_or_queenside(b_index),
-                    'K' => cg.state.board[b_index] = Parity::BLACK | PieceByte::KING | get_king_or_queenside(b_index),
-                    
-                    'p' => cg.state.board[b_index] = Parity::WHITE | PieceByte::PAWN | get_king_or_queenside(b_index),
-                    'P' => cg.state.board[b_index] = Parity::BLACK | PieceByte::PAWN | get_king_or_queenside(b_index),
+                    'k' => {
+                        black_king_index = b_index;
+                        cg.state.board[b_index] = Parity::BLACK | PieceByte::KING | get_king_or_queenside(b_index);
+                    },
+                    'K' => {
+                        white_king_index = b_index;
+                        cg.state.board[b_index] = Parity::WHITE | PieceByte::KING | get_king_or_queenside(b_index);
+                    },
+                    'p' => cg.state.board[b_index] = Parity::BLACK | PieceByte::PAWN | get_king_or_queenside(b_index),
+                    'P' => cg.state.board[b_index] = Parity::WHITE | PieceByte::PAWN | get_king_or_queenside(b_index),
 
                     _ => ()
                     
@@ -84,6 +93,15 @@ impl ChessGame {
 
         }
         cg.state.turn = if fen.chars().nth(index + 1).unwrap() == 'w' { Parity::WHITE } else { Parity::BLACK };
+        if cg.state.turn == Parity::WHITE {
+            if white_king_index < 64 {
+                cg.state.kings = (Mask::from_index(white_king_index), Mask::from_index(black_king_index));
+            }
+        } else {
+            if black_king_index < 64 {
+                cg.state.kings = (Mask::from_index(black_king_index), Mask::from_index(white_king_index));
+            }
+        }
         index += 3; // Skip space, turn char, and another space
         while index < fen.len() && fen.chars().nth(index) != Some(' ') {
             match fen.chars().nth(index).unwrap(){
@@ -105,9 +123,8 @@ impl ChessGame {
         let mut move_counts = fen[index..].split(' ');
         cg.state.halfmove_clock = move_counts.nth(0).unwrap_or("0").parse::<u64>().unwrap_or(0);
         cg.state.fullmove_number = move_counts.nth(0).unwrap_or("1").parse::<u64>().unwrap_or(1);
-
-        cg.state.refresh(None);
-
+        
+        cg.state.accept();
         return cg;
     }
 
@@ -129,86 +146,37 @@ impl ChessGame {
         */
         return false;
     }
-    fn remove_piece_from_game(&mut self, piece_to_remove: usize) {
-        self.state.moves[piece_to_remove] = PieceCachedMoves::default();
-        self.state.board[piece_to_remove] = 0u8;
-    }
-    fn try_take(&mut self, using: usize, take: usize) -> bool {
-        if (self.state.moves[using].moves & Mask::from_index(take)).any() {
-            self.remove_piece_from_game(take);
-            self.state.board[take] = self.state.board[using];
-            self.state.board[using] = 0u8;
-            return true;
-        }
-        return false;
-    }
-    fn try_move(&mut self, using: usize, to: usize) -> bool {
-        if (self.state.moves[using].moves & Mask::from_index(to)).any() {
-            self.state.board[to] = self.state.board[using];
-            self.state.board[using] = 0u8;
-            return true;
-        }
-        return false;
-    }
-    fn try_castle(&mut self, king: usize, rook: usize) -> bool {
-        let kp = self.state.board[king];
-        let km = self.state.moves[king];
-        let castle_bits = if kp.get_parity() == Parity::WHITE { km.castles & 0b00000011 } else { (km.castles & 0b00001100) >> 2 };
-        if (rook % 8) > (king % 8) {
-            if (castle_bits & 0b00000001) != 0 {
-                self.state.board[king + 2] = self.state.board[king];
-                self.state.board[king] = 0u8;
-                self.state.board[rook - 2] = self.state.board[rook];
-                self.state.board[rook] = 0u8;
-                return true;
-            }
-        } else {
-            if (castle_bits & 0b00000010) != 0 {
-                self.state.board[king - 2] = self.state.board[king];
-                self.state.board[king] = 0u8;
-                self.state.board[rook + 3] = self.state.board[rook];
-                self.state.board[rook] = 0u8;
-                return true;
-            }
-        }
-        return false;
-    }
     pub fn human_input(&mut self, pos: Point, player_parity: Parity) -> () {
         if player_parity == self.state.turn || player_parity == Parity::BOTH {
-            let piece_at_input = self.state.get_piece_at_index(pos.to_index());
+            let pos_index = pos.to_index();
             let current_selection = self.state.get_piece_at_index(self.selected);
-            dbg!(self.state.turn);
-            let mut result = (false, -1, 65);
+            let piece_at_input = self.state.get_piece_at_index(pos_index);
             if current_selection != 0 {
-                if piece_at_input != 0 {
-                    if piece_at_input.get_parity() != current_selection.get_parity() {
-                        result = (self.try_take(self.selected, pos.to_index()), 1, pos.to_index());
-                    } else {
-                        if piece_at_input.get_parity() == self.state.turn {
-                            if pos.to_index() != self.selected && piece_at_input.get_ptype() == PieceByte::ROOK && current_selection.get_ptype() == PieceByte::KING && self.state.moves[self.selected].castles != 0 {
-                                result = (self.try_castle(self.selected, pos.to_index()), 2, pos.to_index());
-                            } else {
-                                self.selected = pos.to_index();
-                            }
-                        }
-                    }
+                let result = self.state.try_accept(self.selected, pos_index);
+                if result != usize::MAX {
+                    self.selected = 65;
+                    self.state_history.push(self.state.purge(result));
+                    std::mem::swap(self.state_history.last_mut().unwrap(), &mut self.state);
+                    self.state.accept();
                 } else {
-                    result = (self.try_move(self.selected, pos.to_index()), 0, pos.to_index());
+                    if piece_at_input.get_parity() == self.state.turn {
+                        self.selected = pos_index;
+                    } else if piece_at_input == 0 {
+                        self.selected = 65;
+                    }
                 }
             } else {
-                if piece_at_input != 0 && piece_at_input.get_parity() == self.state.turn {
-                    self.selected = pos.to_index();
+                if piece_at_input != 0 {
+                    if piece_at_input.get_parity() == self.state.turn {
+                        self.selected = pos_index; 
+                    }
+                } else {
+                    self.selected = 65;
                 }
             }
-            if result.0 {
-                self.end_turn(result.1, result.2);
-            }
+
+            
+
         }
-    }
-    fn end_turn(&mut self, move_code: i32, context: usize) {
-
-        self.selected = 65;
-
-        self.state.refresh(None);
     }
 }
