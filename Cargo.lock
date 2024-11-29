@@ -1130,7 +1130,9 @@ dependencies = [
  "eframe",
  "egui_extras",
  "num-traits",
+ "rand_chacha",
  "stanza",
+ "voxell_rng",
 ]
 
 [[package]]
@@ -3142,6 +3144,16 @@ name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0b928f33d975fc6ad9f86c8f283853ad26bdd5b10b7f1542aa2fa15e2289105a"
+
+[[package]]
+name = "voxell_rng"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "16c50a9a6746c21f3d1b04a9a02bbe57ac155908dcbddffa37e88365d1b1f2b7"
+dependencies = [
+ "getrandom",
+ "rand_core",
+]
 
 [[package]]
 name = "walkdir"

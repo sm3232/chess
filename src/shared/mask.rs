@@ -1,11 +1,8 @@
-
-
 use crate::shared::point::Point;
 #[derive(Clone,Copy)]
 pub struct Mask {
     pub raw: u64
 }
-
 
 impl std::fmt::Debug for Mask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -20,139 +17,11 @@ impl std::fmt::Debug for Mask {
 }
 
 impl Default for Mask {
-    fn default() -> Self {
-        return Mask { raw: 0u64 };
-    }
+    fn default() -> Self { Self { raw: 0u64 } }
 }
-
-impl std::ops::BitXor<Point> for Mask {
-    type Output = Mask;
-    fn bitxor(self, rhs: Point) -> Mask {
-        Mask { raw: Mask::from_point(rhs).raw ^ self.raw }
-    }
-}
-impl std::ops::BitXor<u64> for Mask {
-    type Output = Mask;
-    fn bitxor(self, rhs: u64) -> Mask {
-        Mask { raw: self.raw ^ rhs }
-    }
-}
-impl std::ops::BitXor<Mask> for Mask {
-    type Output = Mask;
-    fn bitxor(self, rhs: Mask) -> Mask {
-        Mask { raw: self.raw ^ rhs.raw }
-    }
-}
-impl std::ops::BitXorAssign<Mask> for Mask {
-    fn bitxor_assign(&mut self, rhs: Mask) {
-        self.raw ^= rhs.raw;
-    }
-}
-impl std::ops::BitXorAssign<u64> for Mask {
-    fn bitxor_assign(&mut self, rhs: u64) {
-        self.raw ^= rhs;
-    }
-}
-impl std::ops::BitXorAssign<Point> for Mask {
-    fn bitxor_assign(&mut self, rhs: Point) {
-        *self ^= Mask::from_point(rhs);
-    }
-}
-impl std::ops::BitOrAssign<Mask> for Mask {
-    fn bitor_assign(&mut self, rhs: Mask) {
-        self.raw |= rhs.raw;
-    }
-}
-impl std::ops::BitOrAssign<u64> for Mask {
-    fn bitor_assign(&mut self, rhs: u64) {
-        self.raw |= rhs;
-    }
-}
-impl std::ops::BitOrAssign<Point> for Mask {
-    fn bitor_assign(&mut self, rhs: Point) {
-        *self |= Mask::from_point(rhs);
-    }
-}
-
-impl std::ops::BitOr<Mask> for Mask {
-    type Output = Mask;
-    fn bitor(self, rhs: Mask) -> Mask {
-        return Mask { raw: self.raw | rhs.raw };
-    }
-}
-impl std::ops::BitOr<u64> for Mask {
-    type Output = Mask;
-    fn bitor(self, rhs: u64) -> Mask {
-        return Mask { raw: self.raw | rhs };
-    }
-}
-impl std::ops::BitOr<Point> for Mask {
-    type Output = Mask;
-    fn bitor(self, rhs: Point) -> Mask {
-        return self | Mask::from_point(rhs);
-    }
-}
-
-impl std::ops::BitAndAssign<Mask> for Mask {
-    fn bitand_assign(&mut self, rhs: Mask) {
-        self.raw |= rhs.raw;
-    }
-}
-impl std::ops::BitAndAssign<u64> for Mask {
-    fn bitand_assign(&mut self, rhs: u64) {
-        self.raw |= rhs;
-    }
-}
-impl std::ops::BitAndAssign<Point> for Mask {
-    fn bitand_assign(&mut self, rhs: Point) {
-        return *self &= Mask::from_point(rhs);
-    }
-}
-
-
-impl std::ops::BitAnd<Mask> for Mask {
-    type Output = Mask;
-    fn bitand(self, rhs: Mask) -> Mask {
-        return Mask { raw: self.raw & rhs.raw };
-    }
-}
-impl std::ops::BitAnd<u64> for Mask {
-    type Output = Mask;
-    fn bitand(self, rhs: u64) -> Mask {
-        return Mask { raw: self.raw & rhs };
-        
-    }
-}
-impl std::ops::BitAnd<Point> for Mask {
-    type Output = Mask;
-    fn bitand(self, rhs: Point) -> Mask {
-        return self & Mask::from_point(rhs);
-    }
-}
-
 
 #[allow(dead_code)]
 impl Mask {
-    pub fn shiftl(&mut self, n: i32){
-        self.raw <<= n;
-    }
-    pub fn shiftr(&mut self, n: i32){
-        self.raw >>= n;
-    }
-    pub fn any(&self) -> bool {
-        return self.raw > 0;
-    }
-    pub fn none(&self) -> bool {
-        return !self.any();
-    }
-    pub fn not(&mut self) -> Self {
-        self.raw = !self.raw;
-        return *self;
-    }
-    pub fn get_not(&self) -> Self {
-        Mask { raw: !self.raw }
-    }
-
     pub fn to_point_vector(&self) -> Vec<Point> {
         let bv = &mut self.raw.to_ne_bytes();
         let mut v: Vec<Point> = Vec::new();
@@ -166,6 +35,7 @@ impl Mask {
         }
         return v;
     }
+
     pub fn to_point(&self) -> Option<Point> {
         let bv = &mut self.raw.to_ne_bytes();
         for (index, byte) in bv.iter().enumerate() {
@@ -204,11 +74,6 @@ impl Mask {
         return format!("{str}");
     }
 
-    #[inline(always)]
-    pub fn bit_count(&self) -> i32 {
-        return self.raw.count_ones() as i32;
-    }
-
     pub fn get_y_gap<'a>(m1: &'a Mask, m2: &'a Mask) -> (usize, &'a Mask) {
         let (mut from, to, low) = if m1.raw < m2.raw {
             (m1.raw, m2.raw, m1)
@@ -227,6 +92,7 @@ impl Mask {
             if gap > 8 { panic!("Y Gap > 8") };
         };
     }
+
     pub fn get_x_gap(m1: &Mask, m2: &Mask) -> usize {
         let (mut from, to) = if (m1.raw % 8) < (m2.raw % 8) {
             (m1.raw, m2.raw)
@@ -262,24 +128,21 @@ impl Mask {
     }
 
     pub fn point_add(mask: &Mask, point: &Point) -> Mask {
-        let bv = &mut mask.raw.to_ne_bytes();
-        for (index, byte) in bv.iter().enumerate() {
-            for bit in 0..8 {
-                if byte & (1 << bit) != 0 {
-                    return Mask::from_point(Point { x: bit, y: index as i32 } + *point);
-                }
-            }
-        }
-        return Mask::default();
+        return if let Some(mask_as_point) = &mask.to_point() {
+            Mask::from_point(mask_as_point + point)
+        } else {
+            Mask::default()
+        };
     }
 
     pub fn from_point(point: Point) -> Mask {
         if point.x > 7 || point.y > 7 || point.x < 0 || point.y < 0 { return Mask::default() };
         let mut mask = Mask { raw: 1u64 };
-            mask.shiftl(8 * (point.y));
-            mask.shiftl(1 * (point.x));
+        mask.shiftl(8 * (point.y));
+        mask.shiftl(1 * (point.x));
         return mask;
     }
+
     pub fn of_column(col: i32) -> Mask {
         let bit = 1u64 << col;
         let mut mask = Mask { raw: bit };
@@ -289,12 +152,7 @@ impl Mask {
         }
         return mask;
     }
-
-    pub fn from_index(index: usize) -> Mask {
-        return Mask {
-            raw: (1u64 << index)
-        };
-    }
+    
     pub fn as_index(&self) -> usize {
         let bv = &mut self.raw.to_ne_bytes();
         for (index, byte) in bv.iter().enumerate() {
@@ -307,22 +165,203 @@ impl Mask {
         return 0usize;
     }
 
+    pub fn from_castle_bytes(bytes: u8) -> Self {
+        let mut m = Self { raw: 0u64 };
+        if (bytes & 0b0000_0001) != 0 { m |= Mask::from_point(Point {x: 7, y: 0}) };
+        if (bytes & 0b0000_0010) != 0 { m |= Mask::from_point(Point {x: 0, y: 0}) };
+        if (bytes & 0b0000_0100) != 0 { m |= Mask::from_point(Point {x: 7, y: 7}) };
+        if (bytes & 0b0000_1000) != 0 { m |= Mask::from_point(Point {x: 0, y: 7}) };
+        return m;
+    }
 
+    #[inline(always)]
+    pub fn from_index(index: usize) -> Mask { Mask { raw: (1u64 << index) } }
+
+    #[inline(always)]
+    pub fn bit_count(&self) -> u32 { self.raw.count_ones() }
+
+    #[inline(always)]
+    pub fn shiftl(&mut self, n: i32){ self.raw <<= n }
+
+    #[inline(always)]
+    pub fn shiftr(&mut self, n: i32){ self.raw >>= n }
+
+    #[inline(always)]
+    pub fn shiftup(&mut self, n: usize) { self.raw <<= n * 8 }
+
+    #[inline(always)]
+    pub fn shiftdown(&mut self, n: usize) { self.raw >>= n * 8 }
+
+    #[inline(always)]
+    pub fn any(&self) -> bool { self.raw > 0 }
+
+    #[inline(always)]
+    pub fn none(&self) -> bool { !self.any() }
+
+    #[inline(always)]
+    pub fn get_not(&self) -> Self { Mask { raw: !self.raw } }
+
+    #[inline(always)]
+    pub fn not(&mut self) -> Self {
+        self.raw = !self.raw;
+        return *self;
+    }
 }
 
-impl PartialEq<u8> for Mask {
-    fn eq(&self, other: &u8) -> bool {
-        return self.bit_count() == 1 && (
-            (1u64 << other ) == self.raw
-        );
-        
+
+impl PartialEq<Point> for Mask {
+    #[inline(always)]
+    fn eq(&self, other: &Point) -> bool {
+        return Mask::from_point(*other).raw == self.raw;
     }
 }
 impl PartialEq<usize> for Mask {
+    #[inline(always)]
     fn eq(&self, other: &usize) -> bool {
         return self.bit_count() == 1 && (
             (1u64 << other) == self.raw
         );
+    }
+}
+impl PartialEq<Mask> for Mask {
+    #[inline(always)]
+    fn eq(&self, other: &Mask) -> bool {
+        return self.raw == other.raw;
         
+    }
+}
+
+
+/*      XOR     */
+impl std::ops::BitXor<Point> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Point) -> Self {
+        Self { raw: Self::from_point(rhs).raw ^ self.raw }
+    }
+}
+impl std::ops::BitXor<u64> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: u64) -> Self {
+        Self { raw: self.raw ^ rhs }
+    }
+}
+impl std::ops::BitXor<Mask> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitxor(self, rhs: Self) -> Self {
+        Self { raw: self.raw ^ rhs.raw }
+    }
+}
+
+/*      XOR ASSIGN     */
+impl std::ops::BitXorAssign<Point> for Mask {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: Point) {
+        self.raw ^= Self::from_point(rhs).raw;
+    }
+}
+impl std::ops::BitXorAssign<u64> for Mask {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: u64) {
+        self.raw ^= rhs;
+    }
+}
+impl std::ops::BitXorAssign<Mask> for Mask {
+    #[inline(always)]
+    fn bitxor_assign(&mut self, rhs: Self) {
+        self.raw ^= rhs.raw;
+    }
+}
+
+/*      OR      */
+impl std::ops::BitOr<Point> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Point) -> Self {
+        return self | Self::from_point(rhs);
+    }
+}
+impl std::ops::BitOr<u64> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: u64) -> Self {
+        return Self { raw: self.raw | rhs };
+    }
+}
+impl std::ops::BitOr<Mask> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitor(self, rhs: Self) -> Self {
+        return Self { raw: self.raw | rhs.raw };
+    }
+}
+
+/*      OR ASSIGN       */
+impl std::ops::BitOrAssign<Point> for Mask {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Point) {
+        self.raw |= Self::from_point(rhs).raw;
+    }
+}
+impl std::ops::BitOrAssign<u64> for Mask {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: u64) {
+        self.raw |= rhs;
+    }
+}
+impl std::ops::BitOrAssign<Mask> for Mask {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: Self) {
+        self.raw |= rhs.raw;
+    }
+}
+impl std::ops::BitOrAssign<usize> for Mask {
+    #[inline(always)]
+    fn bitor_assign(&mut self, rhs: usize) { self.raw |= Mask::from_index(rhs).raw }
+}
+
+/*      AND      */
+impl std::ops::BitAnd<Point> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Point) -> Self {
+        return self & Self::from_point(rhs);
+    }
+}
+impl std::ops::BitAnd<u64> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: u64) -> Self {
+        return Self { raw: self.raw & rhs };
+        
+    }
+}
+impl std::ops::BitAnd<Mask> for Mask {
+    type Output = Self;
+    #[inline(always)]
+    fn bitand(self, rhs: Self) -> Self {
+        return Self { raw: self.raw & rhs.raw };
+    }
+}
+
+/*      AND ASSIGN      */
+impl std::ops::BitAndAssign<Point> for Mask {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Point) {
+        return self.raw &= Self::from_point(rhs).raw;
+    }
+}
+impl std::ops::BitAndAssign<u64> for Mask {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: u64) {
+        self.raw |= rhs;
+    }
+}
+impl std::ops::BitAndAssign<Mask> for Mask {
+    #[inline(always)]
+    fn bitand_assign(&mut self, rhs: Self) {
+        self.raw |= rhs.raw;
     }
 }
