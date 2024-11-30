@@ -1,7 +1,8 @@
-use crate::{cutil::pretty_print::pretty_print_board, shared::{
+use crate::lib::{
     boardarray::BoardArray, chessbyte::ChessByte, piece::{Parity, PieceByte}, state::State
-}};
+};
 
+#[derive(Clone)]
 pub struct EvaluationTerm {
     pub white_score: i32,
     pub black_score: i32,
@@ -13,6 +14,7 @@ impl std::fmt::Display for EvaluationTerm {
 impl std::fmt::Debug for EvaluationTerm {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { write!(f, "{}\tW{}\tB{}", self.name, self.white_score, self.black_score) }
 }
+#[derive(Clone)]
 pub struct Evaluator {
     pub eval: i32,
     pub scores: Vec<EvaluationTerm>
@@ -80,7 +82,7 @@ pub fn start_eval(state: &State) -> Evaluator {
 
 }
 mod imbalance {
-    use crate::shared::{
+    use crate::lib::{
         chessbyte::ChessByte,
         piece::{Parity, PieceByte}
     };
@@ -230,7 +232,7 @@ fn scale_factor(board: &[u8; 64], endgame: i32) -> i32 {
 
 
 pub mod pieces {
-    use crate::shared::{
+    use crate::lib::{
         boardarray::BoardArray, chessbyte::ChessByte, motion::Motion, piece::{Parity, PieceByte}
     };
 
@@ -690,7 +692,7 @@ pub mod pieces {
 }
 
 mod mobility {
-    use crate::shared::{
+    use crate::lib::{
         chessbyte::ChessByte, motion::Motion
     };
 
@@ -792,7 +794,7 @@ mod mobility {
 }
 
 mod pawn {
-    use crate::shared::{
+    use crate::lib::{
         chessbyte::ChessByte,
         piece::PieceByte
     };
@@ -958,7 +960,7 @@ mod pawn {
 }
 
 pub mod material {
-    use crate::shared::{
+    use crate::lib::{
         chessbyte::ChessByte,
         piece::{Parity, PieceByte}
     };

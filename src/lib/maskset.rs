@@ -1,4 +1,4 @@
-use crate::shared::{
+use crate::lib::{
     chessbyte::ChessByte,
     mask::Mask
 };

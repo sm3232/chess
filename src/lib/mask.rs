@@ -1,4 +1,4 @@
-use crate::shared::point::Point;
+use crate::lib::point::Point;
 #[derive(Clone,Copy)]
 pub struct Mask {
     pub raw: u64

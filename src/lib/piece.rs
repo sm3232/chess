@@ -1,4 +1,3 @@
-use crate::shared::{point::Point, mask::Mask};
 
 #[derive(Clone, Copy, Eq, PartialEq, Debug)]
 #[repr(u8)]

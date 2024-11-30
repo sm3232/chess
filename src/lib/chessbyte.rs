@@ -1,4 +1,4 @@
-use crate::shared::piece::{Parity, PieceByte};
+use crate::lib::piece::{Parity, PieceByte};
 
 #[inline(always)]
 pub fn byte_is_sided(byte: &u8) -> bool { byte.is_sided() }

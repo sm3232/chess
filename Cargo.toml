@@ -1,5 +1,5 @@
 [package]
-name = "final-1"
+name = "chess"
 version = "0.1.0"
 edition = "2021"
 

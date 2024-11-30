@@ -1,14 +1,7 @@
 pub mod draw {
     use eframe::egui::{self, Painter};
-    use crate::game;
-    use crate::shared::eval::material::get_visual_material_weights;
-    use crate::shared::mask::Mask;
-    use crate::shared::piece::PieceByte;
-    use crate::shared::{
-        piece::Parity,
-        point::Point,
-        chessbyte::ChessByte,
-        eval::material
+    use crate::lib::{
+        chessbyte::ChessByte, game, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point
     };
 
     pub fn visual_weight_remap_table(piece: PieceByte) -> (i32, i32) {
@@ -55,8 +48,8 @@ pub mod draw {
         }
         return sqsize;
     }
-    pub fn draw_pieces (game: &game::ChessGame, ui: &mut egui::Ui, sqsize: f32) -> () {
-        for (index, &byte) in game.state.borrow().board.iter().enumerate() {
+    pub fn draw_pieces (board: &[u8; 64], ui: &mut egui::Ui, sqsize: f32) -> () {
+        for (index, &byte) in board.iter().enumerate() {
             if byte == 0 {
                 continue;
             }
@@ -77,30 +70,27 @@ pub mod draw {
         };
     }
 
-    pub fn draw_debug_info(game: &mut game::ChessGame, painter: &Painter, sqsize: f32, hover: Option<Point>) -> () {
-        if game.selected != 65 {
-            painter.debug_rect(Mask::from_index(game.selected).to_painter_rect(sqsize), egui::Color32::GREEN, "SELECTED");
-            let cached_moves = &game.state.borrow().moves[game.selected];
+    pub fn draw_debug_info(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], painter: &Painter, sqsize: f32, hover: Option<Point>) -> () {
+        if selected != 65 {
+            painter.debug_rect(Mask::from_index(selected).to_painter_rect(sqsize), egui::Color32::GREEN, "SELECTED");
+            let cached_moves = &moves[selected];
             for m in cached_moves.iter() { painter.debug_rect(usize_painter_rect(m.to, sqsize), egui::Color32::LIGHT_GREEN, "MOVE") };
         }
         if let Some(hp) = hover {
             if hp.valid() {
-                let cached_moves = &game.state.borrow().moves[hp.to_index()];
+                let cached_moves = &moves[hp.to_index()];
                 for m in cached_moves.iter() {
                     painter.debug_rect(usize_painter_rect(m.to, sqsize), egui::Color32::LIGHT_GREEN, "MOVE") ;
                 }
             }
         }
-        let ep = game.state.borrow().info.enpassant_mask;
-        if ep.any() { painter.debug_rect(ep.to_painter_rect(sqsize), egui::Color32::LIGHT_RED, "ENPASSANT") };
-
 
     }
 
-    pub fn draw_all(game: &mut game::ChessGame, ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter, hover: Option<Point>) -> () {
+    pub fn draw_all(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter, hover: Option<Point>) -> () {
         let sqsize = draw_board(bg_painter);
-        draw_pieces(game, ui, sqsize);
-        draw_debug_info(game, dbg_painter, sqsize, hover);
+        draw_pieces(board, ui, sqsize);
+        draw_debug_info(board, selected, moves, dbg_painter, sqsize, hover);
 
     }
 
@@ -114,10 +104,10 @@ pub mod pretty_print {
     use stanza::renderer::Renderer;
     use stanza::style::{ HAlign, Header, MaxWidth, MinWidth, Styles};
     use stanza::table::{ Col, Row, Table};
-    use crate::shared::chessbyte::ChessByte;
-    use crate::shared::eval::{EvaluationTerm, Evaluator};
-    use crate::shared::mask::Mask;
-    use crate::shared::motion::Motion;
+    use crate::lib::chessbyte::ChessByte;
+    use crate::lib::eval::{EvaluationTerm, Evaluator};
+    use crate::lib::mask::Mask;
+    use crate::lib::motion::Motion;
 
     #[allow(dead_code)]
     /*

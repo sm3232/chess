@@ -1,12 +1,11 @@
-use std::{cell::RefCell, rc::Rc};
+use std::{cell::RefCell, rc::Rc, sync::{Arc, Mutex}};
 
-use crate::{cutil::pretty_print::pretty_print_mask, shared::{
-    chessbyte::{
-        byte_is_kingside, byte_is_queenside, ChessByte
-    }, mask::Mask, maskset::MaskSet, piece::{
+use crate::lib::{
+    chessbyte::ChessByte,
+    mask::Mask, maskset::MaskSet, piece::{
         Parity, PieceByte
     }, point::Point
-}};
+};
 
 use super::{motion::Motion, state::{RetainedStateInfo, ARRAY_REPEAT_VALUE}, zobrist::Zobrist};
 
@@ -196,44 +195,6 @@ fn rook_xray(rook_index: usize) -> Mask {
 fn queen_xray(queen_index: usize) -> Mask { bishop_xray(queen_index) | rook_xray(queen_index) }
 
 
-fn sliding_move(piece: u8, index: usize, _everyone_else: &[u8; 64], enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
-    let index_mask = Mask::from_index(index);
-    
-    let mut move_mask = Mask::default();
-    let dirs = piece.get_directions();
-    let mut hits = 0b00000000u8;
-    for i in 1..=8 {
-        for k in 0..8 {
-            if dirs & (1 << k) != 0 {
-                let pos = match k {
-                    0 => Mask::point_add(&index_mask, &(Point { x: 1, y: 0 } * i)),
-                    1 => Mask::point_add(&index_mask, &(Point { x: -1, y: 0 } * i)),
-                    2 => Mask::point_add(&index_mask, &(Point { x: 0, y: -1 } * i)),
-                    3 => Mask::point_add(&index_mask, &(Point { x: 0, y: 1 } * i)),
-                    4 => Mask::point_add(&index_mask, &(Point { x: -1, y: 1 } * i)),
-                    5 => Mask::point_add(&index_mask, &(Point { x: -1, y: -1 } * i)),
-                    6 => Mask::point_add(&index_mask, &(Point { x: 1, y: -1 } * i)),
-                    7 => Mask::point_add(&index_mask, &(Point { x: 1, y: 1 } * i)),
-                    _ => Mask::point_add(&index_mask, &(Point::default()))
-                };
-                if pos.any() {
-                    if hits & (1 << k) != 0 { continue };
-                    if (*piece_mask & pos).any() {
-                        if (*enemy_mask & pos).any() {
-                            move_mask |= pos;
-                        }
-                        hits |= 1 << k;
-                    } else {
-                        move_mask |= pos;
-                    }
-                } else {
-                    hits |= 1 << k;
-                }
-            }
-        }
-    }
-    return move_mask;
-}
 fn pawn_xray(piece: u8, pos: usize, enemy_mask: &Mask, piece_mask: &Mask, enpassant: &Mask) -> Mask {
     let mut move_mask = Mask::default();
     if pos / 8 > 47 || pos / 8 < 16 {
@@ -312,7 +273,7 @@ pub trait BoardArray {
     fn get_xrays(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64];
     fn get_moves(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64];
     fn flipped(&self) -> Self;
-    fn make(&mut self, from: usize, to: usize, zobrist: Rc<RefCell<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo);
+    fn make(&mut self, from: usize, to: usize, zobrist: Arc<Mutex<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo);
     fn unmake(&mut self, original_board: &[u8; 64], original_info: &RetainedStateInfo, current_info: &mut RetainedStateInfo) -> ();
     fn get_moves_shallow_ipd(&self, ally_parity: Parity, info: &RetainedStateInfo) -> Mask;
     fn index_in_check(&self, index: usize, ip: Parity, info: &RetainedStateInfo) -> bool;
@@ -337,7 +298,7 @@ impl BoardArray for [u8; 64] {
             enpassant_mask: original_info.enpassant_mask
         };
     }
-    fn make(&mut self, from: usize, to: usize, zobrist: Rc<RefCell<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo) {
+    fn make(&mut self, from: usize, to: usize, zobrist: Arc<Mutex<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo) {
         let original_info = current_info.clone();
 
         let original_board = self.clone();
@@ -370,17 +331,18 @@ impl BoardArray for [u8; 64] {
         } else if from == 7 || to == 7 {
             current_info.allowed_castles &= 0b0000_1110;
         }
+        let zrist = &zobrist.lock().unwrap();
         if is_enpassant {
             if debugging_enabled {
                 println!("Move {from} -> {to} is an enpassant.");
             }
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::PAWN | self[from].get_parity()), from);
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::PAWN | self[from].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::PAWN | self[from].get_parity()), from);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::PAWN | self[from].get_parity()), to);
             if from > to {
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::PAWN | !self[from].get_parity()), to + 8);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::PAWN | !self[from].get_parity()), to + 8);
                 self[to + 8] = 0;
             } else {
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::PAWN | !self[from].get_parity()), to - 8);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::PAWN | !self[from].get_parity()), to - 8);
                 self[to - 8] = 0;
             }
             self.swap(from, to);
@@ -390,8 +352,8 @@ impl BoardArray for [u8; 64] {
                 println!("Move {from} -> {to} is a promotion.");
             }
 
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::PAWN | self[from].get_parity()), from);
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::QUEEN | self[from].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::PAWN | self[from].get_parity()), from);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::QUEEN | self[from].get_parity()), to);
             self.swap(from, to);
             self[to] ^= 0b0000_0110;
             self[to] |= 0b1000_0000;
@@ -402,20 +364,20 @@ impl BoardArray for [u8; 64] {
                 println!("Move {from} -> {to} is a castle.");
             }
             current_info.allowed_castles &= if from == 60 { 0b0000_0011 } else { 0b0000_1100 };
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::KING | self[from].get_parity()), from);
-            current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::ROOK | self[to].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from);
+            current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[to].get_parity()), to);
             if from > to {
                 current_info.king_indices[if from == 60 { 0 } else { 1 }] += 2;
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::KING | self[from].get_parity()), from - 2);
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::ROOK | self[from].get_parity()), from - 1);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from - 2);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[from].get_parity()), from - 1);
                 self.swap(from, from - 2);
                 self.swap(to, from - 1);
                 self[from - 2] |= 0b1000_0000;
                 self[from - 1] |= 0b1000_0000;
             } else {
                 current_info.king_indices[if from == 60 { 0 } else { 1 }] -= 2;
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::KING | self[from].get_parity()), from + 2);
-                current_info.zkey ^= zobrist.borrow().pieces(&(PieceByte::ROOK | self[from].get_parity()), from + 1);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from + 2);
+                current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[from].get_parity()), from + 1);
                 self.swap(from, from + 2);
                 self.swap(to, from + 1);
                 self[from + 2] |= 0b1000_0000;
@@ -428,12 +390,12 @@ impl BoardArray for [u8; 64] {
             if self[from].is_king() {
                 current_info.king_indices[if self[from].is_white() { 0 } else { 1 }] = to;
             }
-            current_info.zkey ^= zobrist.borrow().pieces(&(self[from].get_piece() | self[from].get_parity()), from);
-            current_info.zkey ^= zobrist.borrow().pieces(&(self[to].get_piece() | self[to].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(self[from].get_piece() | self[from].get_parity()), from);
+            current_info.zkey ^= zrist.pieces(&(self[to].get_piece() | self[to].get_parity()), to);
             self.swap(from, to);
             self[from] = 0;
             self[to] |= 0b1000_0000;
-            current_info.zkey ^= zobrist.borrow().pieces(&(self[to].get_piece() | self[to].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(self[to].get_piece() | self[to].get_parity()), to);
         } else {
             if debugging_enabled {
                 println!("Move {from} -> {to} is a normal move.");
@@ -441,14 +403,15 @@ impl BoardArray for [u8; 64] {
             if self[from].is_king() {
                 current_info.king_indices[if self[from].is_white() { 0 } else { 1 }] = to;
             }
-            current_info.zkey ^= zobrist.borrow().pieces(&(self[from].get_piece() | self[from].get_parity()), from);
+            current_info.zkey ^= zrist.pieces(&(self[from].get_piece() | self[from].get_parity()), from);
             self.swap(from, to);
-            current_info.zkey ^= zobrist.borrow().pieces(&(self[to].get_piece() | self[to].get_parity()), to);
+            current_info.zkey ^= zrist.pieces(&(self[to].get_piece() | self[to].get_parity()), to);
             self[to] |= 0b1000_0000;
             self[from] = 0;
         }
 
         current_info.maskset = MaskSet::from_board(self);
+        drop(zrist);
         return (original_board, original_info);
     }
     fn flipped(&self) -> Self {
