@@ -1,6 +1,6 @@
 
 use eframe::egui;
-use std::{cell::RefCell, rc::Rc, sync::{mpsc, Arc, Mutex}, thread::{JoinHandle, Thread}, time::Duration};
+use std::{cell::RefCell, ops::Deref, rc::Rc, sync::{mpsc, Arc, Mutex}, thread::{JoinHandle, Thread}, time::Duration};
 use std::thread;
 
 use crate::lib::{
@@ -23,7 +23,9 @@ pub struct SharedState {
     pub waiting_for_a_human_input: bool,
     pub turn: Parity,
     pub selected: usize,
-    pub evaluation: Evaluator
+    pub evaluation: Evaluator,
+    pub working: bool,
+    pub game_over: bool
 }
 
 pub struct Manager {
@@ -34,7 +36,7 @@ pub struct Manager {
     pub sender: mpsc::Sender<SharedState>,
     pub receiver: mpsc::Receiver<Input>,
     frame: egui::Context,
-    worker: Option<JoinHandle<()>>,
+    worker: Option<JoinHandle<bool>>,
 }
 
 pub struct ManagerPlayer { parity: Parity, searcher: Searcher }
@@ -56,7 +58,7 @@ impl Player for ManagerPlayer {
     fn get_parity(&self) -> Parity {
         return self.parity;
     }
-    fn your_turn(&self, state: Arc<Mutex<State>>) -> () {
+    fn your_turn(&self, state: Arc<Mutex<State>>) -> bool {
         let mut s = Searcher {
             tree: Vec::new(),
             ply: 3,
@@ -64,16 +66,17 @@ impl Player for ManagerPlayer {
             heap: Heap::default()
         };
         s.pv(state.clone(), i32::MIN + 100, i32::MAX - 100, s.ply);
-        println!("Heap peek eval: {}, {} -> {}", s.heap.peek().evaluation, s.heap.peek().motion.from, s.heap.peek().motion.to);
         
         if s.heap.empty() {
-            panic!("No move");
+            println!("No move! Conceding");
+            return false;
         } else {
+            println!("Heap peek eval: {}, {} -> {}", s.heap.peek().evaluation, s.heap.peek().motion.from, s.heap.peek().motion.to);
             let mut locked = state.lock().unwrap();
             locked.make_motion(&s.heap.pop().motion, true);
             drop(locked);
+            return true;
         }
-        // return Some(s.tree[0].clone());
     }
 }
 
@@ -104,9 +107,27 @@ impl Manager {
     }
     pub fn begin(&mut self) -> () {
         loop {
+            if self.game.game_over {
+                thread::sleep(Duration::from_millis(16));
+                let locked = self.game.state.lock().unwrap();
+                let _ = self.sender.send(SharedState {
+                    board: locked.board,
+                    turn: locked.turn,
+                    waiting_for_a_human_input: false,
+                    moves: locked.moves.clone(),
+                    visual_weights: self.game.visual_weights,
+                    evaluation: self.current_eval.clone(),
+                    allowed_castles: locked.info.allowed_castles,
+                    selected: self.game.selected,
+                    tree: Arc::clone(locked.tree_root.as_ref().unwrap()),
+                    working: false,
+                    game_over: true
+                });
+                drop(locked);
+                self.frame.request_repaint();
+                continue;
+            }
             if self.worker.as_ref().is_some_and(|x| !x.is_finished()) {
-
-
                 thread::sleep(Duration::from_millis(16));
                 let locked = self.game.state.lock().unwrap();
 
@@ -118,8 +139,7 @@ impl Manager {
                     (false, true) => if locked.turn == Parity::BLACK { Some(p2.clone().unwrap()) } else { None },
                     (true, true) => if locked.turn == Parity::WHITE { Some(p1.clone().unwrap()) } else { Some(p2.clone().unwrap()) }
                 };
-                
-                if let Some(player) = p {
+                if p.is_some() {
                     let _ = self.sender.send(SharedState {
                         board: locked.board,
                         turn: locked.turn,
@@ -129,13 +149,19 @@ impl Manager {
                         evaluation: self.current_eval.clone(),
                         allowed_castles: locked.info.allowed_castles,
                         selected: self.game.selected,
-                        tree: Arc::clone(locked.tree_root.as_ref().unwrap())
+                        tree: Arc::clone(locked.tree_root.as_ref().unwrap()),
+                        working: true,
+                        game_over: false
                     });
-
                 }
                 self.frame.request_repaint();
                 continue;
             } else {
+                if let Some(w) = self.worker.take() {
+                    if !w.join().unwrap_or(false) {
+                        self.game.game_over = true;
+                    }
+                }
                 self.worker = None;
             }
             let locked = self.game.state.lock().unwrap();
@@ -149,7 +175,9 @@ impl Manager {
                     board: locked.board,
                     allowed_castles: locked.info.allowed_castles,
                     evaluation: self.current_eval.clone(),
-                    visual_weights: self.game.visual_weights
+                    visual_weights: self.game.visual_weights,
+                    working: false,
+                    game_over: false
                 }).unwrap();
                 match self.receiver.recv() {
                     Ok(x) => {
@@ -169,7 +197,7 @@ impl Manager {
                         let data = Arc::clone(&self.game.state);
                         let player = Arc::clone(p);
                         let worker = thread::spawn(move || {
-                            player.your_turn(data);
+                            return player.your_turn(data);
                         });
                         drop(locked);
                         self.worker = Some(worker);

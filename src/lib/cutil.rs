@@ -48,7 +48,7 @@ pub mod draw {
         }
         return sqsize;
     }
-    pub fn draw_pieces (board: &[u8; 64], ui: &mut egui::Ui, sqsize: f32) -> () {
+    pub fn draw_pieces (board: &[u8; 64], ui: &mut egui::Ui, sqsize: f32, lightly: bool) -> () {
         for (index, &byte) in board.iter().enumerate() {
             if byte == 0 {
                 continue;
@@ -57,7 +57,11 @@ pub mod draw {
             if byte.get_parity() == Parity::WHITE { path.push_str("light/") } else { path.push_str("dark/") };
             path.push_str(&byte.get_piece().to_string().to_lowercase());
             path.push_str(".png");
-            egui::Image::from_uri(path).paint_at(ui, egui::Rect {
+            let mut img = egui::Image::from_uri(path);
+            if lightly {
+                img = img.tint(egui::Color32::WHITE.lerp_to_gamma(egui::Color32::TRANSPARENT, 0.9));
+            }
+            img.paint_at(ui, egui::Rect {
                 min: (Point::from_index(index) * sqsize).into(),
                 max: ((Point::from_index(index) + Point { x: 1, y: 1 }) * sqsize).into()
             });
@@ -87,11 +91,12 @@ pub mod draw {
 
     }
 
-    pub fn draw_all(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter, hover: Option<Point>) -> () {
+    pub fn draw_all(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter, hover: Option<Point>, lightly: bool) -> () {
         let sqsize = draw_board(bg_painter);
-        draw_pieces(board, ui, sqsize);
-        draw_debug_info(board, selected, moves, dbg_painter, sqsize, hover);
-
+        draw_pieces(board, ui, sqsize, lightly);
+        if !lightly {
+            draw_debug_info(board, selected, moves, dbg_painter, sqsize, hover);
+        }
     }
 
 }

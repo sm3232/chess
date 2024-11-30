@@ -1,4 +1,5 @@
 
+use std::ops::Deref;
 use std::{rc::Rc, sync::Mutex};
 use std::thread;
 use std::time::Duration;
@@ -23,9 +24,18 @@ use std::sync::{mpsc, Arc};
 use eframe::egui::{self, Color32, Painter, RequestRepaintInfo};
 
 use super::manager::SharedState;
-use super::motion::Motion;
-
-
+pub struct VisualState {
+    pub board: [u8; 64],
+    pub tree: SearchTree
+}
+impl Default for VisualState {
+    fn default() -> Self {
+        return Self {
+            board: [0u8; 64],
+            tree: SearchTree::placeholder(50.0, 50.0)
+        };
+    }
+}
 pub struct ChessApp {
     pub receiver: mpsc::Receiver<SharedState>,
     pub sender: mpsc::Sender<Input>,
@@ -33,12 +43,10 @@ pub struct ChessApp {
     pub has_human: bool,
     pub game_over: bool,
     pub game_rect: egui::Rect,
-    pub info_rect: egui::Rect
+    pub info_rect: egui::Rect,
+    pub last_visual_state: VisualState
 }
 
-fn cbk(info: RequestRepaintInfo) {
-    dbg!(info);
-}
 impl ChessApp {
     pub fn new(creation_context: &eframe::CreationContext<'_>, playing_area: f32, info_width: f32, init_fen: String) -> ChessApp {
         let ctx = creation_context.egui_ctx.clone();
@@ -59,6 +67,7 @@ impl ChessApp {
                 min: egui::Pos2 { x: playing_area, y: 0.0 },
                 max: egui::Pos2 { x: playing_area + info_width, y: playing_area }
             },
+            last_visual_state: VisualState::default()
         };
 
     }
@@ -128,7 +137,6 @@ impl eframe::App for ChessApp {
         };
 
         let input = collect_input(ctx);
-        // if self.game.game_over { let _ = self.tx.send(()); }
         if input.wants_escape {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
@@ -138,38 +146,24 @@ impl eframe::App for ChessApp {
         if input.wants_unpause {
             self.paused = false;
         }
+        
         egui::CentralPanel::default().frame(egui::Frame::none().inner_margin(egui::Margin{ top: 0.0, left: 0.0, bottom: 0.0, right: 30.0 })).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::Vec2 { x: 15.0, y: 0.0 };
             ui.style_mut().override_text_style = Some(egui::TextStyle::Monospace);
             ui.horizontal_top(|ui| {
-                /* 
-                   if !self.game_over && !self.paused {
-                   if !self.game.poll_players() {
-                   if self.game.human_player != Parity::NONE {
-                   if self.game.human_player == self.game.state.borrow().turn || self.game.human_player == Parity::BOTH {
-                   if input.left {
-                   self.game.human_input(input.pos.unwrap(), self.game.human_player);
-                   self.current_eval = eval::start_eval(&self.game.state.borrow());
-                   }
-                   }
-                   }
-                   } else {
-                   self.current_eval = eval::start_eval(&self.game.state.borrow());
-                   }
-                   }
-                   */
-                // Draw everything
                 ui.horizontal(|ui| {
                     let game_response = ui.allocate_rect(self.game_rect, egui::Sense { click: true, drag: false, focusable: false });
                     ui.with_layer_id(game_response.layer_id, |game_ui| {
                         game_ui.with_layer_id(egui::LayerId::new(egui::Order::Middle, egui::Id::new("fg")), |uui| {
                             let dbg_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("dbg_painter")), self.game_rect);
                             let bg_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Background, egui::Id::new("bg_painter")), self.game_rect);
-                            draw::draw_all(&state.board, state.selected, &state.moves, uui, &bg_painter, &dbg_painter, input.pos);
+                            if state.working {
+                                draw::draw_pieces(&state.board, uui, bg_painter.clip_rect().width().min(bg_painter.clip_rect().height()) / 8.0, true);
+                            }
+                            draw::draw_all(&self.last_visual_state.board, state.selected, &state.moves, uui, &bg_painter, &dbg_painter, input.pos, false);
                         });
 
-
-                        if self.game_over {
+                        if state.game_over {
                             game_ui.with_layer_id(egui::LayerId::new(egui::Order::TOP, egui::Id::new("top")), |uui| {
                                 if state.turn == Parity::WHITE {
                                     let rich = egui::RichText::new("BLACK WINS").monospace().size(48.0).color(Color32::BLACK).background_color(draw::BOARD_W_COLOR);
@@ -227,13 +221,26 @@ impl eframe::App for ChessApp {
                             }
                         }
                     });
-                    let (tree_id, tree_rect) = ui.allocate_space(egui::Vec2 { x: ui.available_width(), y: ui.available_height() });
+                    let (_, tree_rect) = ui.allocate_space(egui::Vec2 { x: ui.available_width(), y: ui.available_height() * 2.0 });
                     let tree_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("tree_painter")), tree_rect);
-                    println!("getting lock");
-                    SearchTree::display(&state.tree, ui, &tree_painter);
-                    println!("done");
+                    if state.working {
+                        SearchTree::display(&state.tree, ui, &tree_painter);
+                    } else {
+                        SearchTree::display_nobs(&self.last_visual_state.tree, ui, &tree_painter);
+                    }
                 });
+
             });
+            let mut treelock = state.tree.try_lock();
+            if let Ok(ref mut mtx) = treelock {
+                if mtx.children.len() != 0 {
+                    self.last_visual_state.tree = SearchTree::absolutely_cloned(mtx);
+                }
+            }
+            drop(treelock);
+            if !state.working {
+                self.last_visual_state.board = state.board;
+            }
             if state.waiting_for_a_human_input {
                 let _ = self.sender.send(input).unwrap();
             }

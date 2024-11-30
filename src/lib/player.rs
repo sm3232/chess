@@ -8,5 +8,5 @@ use crate::lib::{
 
 pub trait Player: Send + Sync {
     fn get_parity(&self) -> Parity;
-    fn your_turn(&self, state: Arc<Mutex<State>>) -> ();
+    fn your_turn(&self, state: Arc<Mutex<State>>) -> bool;
 }
