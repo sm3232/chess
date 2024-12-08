@@ -13,26 +13,26 @@ use crate::lib::{
     searchtree::SearchTree
 };
 
-use super::{heap::EvaluatedMotion, motion::Motion, searcher::SearchDriver, state::State, ui::Input};
+use super::{heap::EvaluatedMotion, motion::Motion, searcher::{SearchCheckIn, SearchDriver}, state::State, ui::Input};
 pub struct VisualInfo {
     pub visual_weights: Option<[i32; 64]>,
     pub cache_saves: Option<usize>,
     pub analyzed: Option<usize>,
     pub evaluation: Option<Evaluator>,
-    pub tree: Option<Arc<Mutex<SearchTree>>>,
+    pub tree: Option<SearchTree>,
 }
 impl VisualInfo {
     pub fn none() -> Self { Self { analyzed: None, cache_saves: None, tree: None, evaluation: None, visual_weights: None } }
-    pub fn weight_eval_tree(weights: &Option<[i32; 64]>, evaluator: Evaluator, tree: Arc<Mutex<SearchTree>>) -> Self {
+    pub fn weight_eval(weights: &Option<[i32; 64]>, evaluator: Evaluator) -> Self {
         Self {
             visual_weights: *weights,
             evaluation: Some(evaluator),
-            tree: Some(tree),
+            tree: None,
             cache_saves: None,
             analyzed: None
         }
     }
-    pub fn all(weights: &[i32; 64], evaluator: Evaluator, tree: Arc<Mutex<SearchTree>>, cache: usize, analyze: usize) -> Self {
+    pub fn all(weights: &[i32; 64], evaluator: Evaluator, tree: SearchTree, cache: usize, analyze: usize) -> Self {
         Self {
             visual_weights: Some(*weights),
             evaluation: Some(evaluator),
@@ -43,15 +43,15 @@ impl VisualInfo {
     }
 }
 pub struct SharedState {
-    pub board: [u8; 64],
-    pub allowed_castles: u8,
-    pub moves: [Vec<Motion>; 64],
-    pub waiting_for_a_human_input: bool,
-    pub turn: Parity,
-    pub selected: usize,
-    pub working: bool,
-    pub game_over: bool,
-    pub visuals: VisualInfo
+    pub board: Option<[u8; 64]>,
+    pub allowed_castles: Option<u8>,
+    pub moves: Option<[Vec<Motion>; 64]>,
+    pub waiting_for_a_human_input: Option<bool>,
+    pub turn: Option<Parity>,
+    pub selected: Option<usize>,
+    pub working: Option<bool>,
+    pub game_over: Option<bool>,
+    pub visuals: Option<VisualInfo>
 }
 
 pub struct Manager {
@@ -61,6 +61,7 @@ pub struct Manager {
     pub current_eval: Evaluator,
     pub sender: mpsc::Sender<SharedState>,
     pub receiver: mpsc::Receiver<Input>,
+    working_channel_recv: Option<mpsc::Receiver<SearchCheckIn>>,
     frame: egui::Context,
     worker: Option<JoinHandle<bool>>,
 }
@@ -74,18 +75,8 @@ impl ManagerPlayer {
             searcher: Searcher {
                 tree: Vec::new(),
                 ply: 2,
-                primary: parity,
-                heap: Heap::default(),
-                echo_table: HashSet::new(),
                 tt: HashMap::new(),
-                cache_saves: 0,
-                analyzed: 0,
-                driver: SearchDriver {
-                    q_nodes: 0,
-                    nodes: 0,
-                    depth: 0,
-                    parity
-                },
+                driver: SearchDriver::default(),
                 mtm: Motion::default()
             }
         };
@@ -93,17 +84,17 @@ impl ManagerPlayer {
 }
 impl Player for ManagerPlayer {
     fn get_cache_saves(&self) -> usize {
-        return self.searcher.cache_saves;
+        return self.searcher.driver.cache_saves;
     }
     fn get_analyzed(&self) -> usize {
-        return self.searcher.analyzed;
+        return self.searcher.driver.positions_looked_at;
     }
     fn get_parity(&self) -> Parity {
         return self.parity;
     }
-    fn your_turn(&mut self, state: Arc<Mutex<State>>) -> bool {
+    fn your_turn(&mut self, state: Arc<Mutex<State>>, comms: mpsc::Sender<SearchCheckIn>) -> bool {
+        self.searcher.driver.communicate_on(comms);
         self.searcher.tree.clear();
-        self.searcher.heap.clear();
         println!("Manager getting lock");
         let mut lock = state.lock().unwrap();
         println!("Manager got lock");
@@ -156,6 +147,7 @@ impl Manager {
             sender,
             receiver,
             worker: None,
+            working_channel_recv: None,
         };
         mgr.game.register_players(None, Some(Arc::new(Mutex::new(ManagerPlayer::new(Parity::BLACK)))));
         let tmplock = mgr.game.state.lock().unwrap();
@@ -183,19 +175,18 @@ impl Manager {
                 thread::sleep(Duration::from_millis(16));
                 let locked = self.game.state.lock().unwrap();
                 let _ = self.sender.send(SharedState {
-                    board: locked.board,
-                    turn: locked.turn,
-                    waiting_for_a_human_input: false,
-                    allowed_castles: locked.info.allowed_castles,
-                    selected: self.game.selected,
-                    working: false,
-                    game_over: true,
-                    moves: if locked.turn == Parity::WHITE { locked.moves.white_moves.clone() } else { locked.moves.black_moves.clone() },
-                    visuals: VisualInfo::weight_eval_tree(
+                    board: Some(locked.board),
+                    turn: Some(locked.turn),
+                    waiting_for_a_human_input: Some(false),
+                    allowed_castles: Some(locked.info.allowed_castles),
+                    selected: Some(self.game.selected),
+                    working: Some(false),
+                    game_over: Some(true),
+                    moves: Some(locked.moves.parity_moves(locked.turn)),
+                    visuals: Some(VisualInfo::weight_eval(
                         &self.game.visual_weights, 
-                        self.current_eval.clone(), 
-                        Arc::clone(locked.tree_root.as_ref().unwrap())
-                    )
+                        self.current_eval.clone()
+                    ))
                 });
                 drop(locked);
                 self.frame.request_repaint();
@@ -203,42 +194,32 @@ impl Manager {
             }
             if self.worker.as_ref().is_some_and(|x| !x.is_finished()) {
                 thread::sleep(Duration::from_millis(16));
-                println!("Manager getting lock for painting purposes");
-                let locked = self.game.state.lock().unwrap();
-                println!("Manager got lock for painting");
-
-                let (p1, p2) = &self.game.players;
-                
-                let p = match (p1.is_some(), p2.is_some()) {
-                    (false, false) => None,
-                    (true, false) => if locked.turn == Parity::WHITE { Some(p1.clone().unwrap()) } else { None },
-                    (false, true) => if locked.turn == Parity::BLACK { Some(p2.clone().unwrap()) } else { None },
-                    (true, true) => if locked.turn == Parity::WHITE { Some(p1.clone().unwrap()) } else { Some(p2.clone().unwrap()) }
-                };
-                if p.is_some() {
-                    println!("Manager sending visual info");
-                    let _ = self.sender.send(SharedState {
-                        board: locked.board,
-                        turn: locked.turn,
-                        waiting_for_a_human_input: false,
-                        moves: if locked.turn == Parity::WHITE { locked.moves.white_moves.clone() } else { locked.moves.black_moves.clone() },
-                        allowed_castles: locked.info.allowed_castles,
-                        working: true,
-                        game_over: false,
-                        selected: self.game.selected,
-                        visuals: VisualInfo::all(
-                            &self.game.visual_weights.unwrap(),
-                            self.current_eval.clone(),
-                            Arc::clone(locked.tree_root.as_ref().unwrap()),
-                            locked.num_cached,
-                            locked.num_analyzed
-                        )
-                    });
-                    println!("Manager send visual info");
+                if let Some(comms) = &self.working_channel_recv {
+                    match comms.try_recv() {
+                        Ok(val) => {
+                            let _ = self.sender.send(SharedState {
+                                board: None,
+                                turn: None,
+                                waiting_for_a_human_input: None,
+                                moves: None,
+                                allowed_castles: None,
+                                working: Some(true),
+                                game_over: None,
+                                selected: None,
+                                visuals: Some(VisualInfo::all(
+                                    &self.game.visual_weights.unwrap(),
+                                    self.current_eval.clone(),
+                                    val.tree,
+                                    val.cache_saves,
+                                    val.positions_looked_at
+                                ))
+                            });
+                            self.frame.request_repaint();
+                        },
+                        Err(mpsc::TryRecvError::Empty) => println!("No data from comms"),
+                        Err(mpsc::TryRecvError::Disconnected) => println!("Comms disconnected!")
+                    }
                 }
-                self.frame.request_repaint();
-                drop(locked);
-                println!("Manager dropped lock");
                 continue;
             } else {
                 if let Some(w) = self.worker.take() {
@@ -251,15 +232,15 @@ impl Manager {
             let locked = self.game.state.lock().unwrap();
             if locked.turn == self.game.human_player || self.game.human_player == Parity::BOTH {
                 let _ = self.sender.send(SharedState {
-                    waiting_for_a_human_input: true,
-                    turn: self.game.human_player,
-                    moves: if self.game.human_player == Parity::WHITE { locked.moves.white_moves.clone() } else { locked.moves.black_moves.clone() },
-                    selected: self.game.selected,
-                    board: locked.board,
-                    allowed_castles: locked.info.allowed_castles,
-                    working: false,
-                    game_over: false,
-                    visuals: VisualInfo::weight_eval_tree(&self.game.visual_weights, self.current_eval.clone(), SearchTree::root(locked.turn))
+                    waiting_for_a_human_input: Some(true),
+                    turn: Some(self.game.human_player),
+                    moves: Some(locked.moves.parity_moves(self.game.human_player)),
+                    selected: Some(self.game.selected),
+                    board: Some(locked.board),
+                    allowed_castles: Some(locked.info.allowed_castles),
+                    working: Some(false),
+                    game_over: Some(false),
+                    visuals: Some(VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone()))
                 }).unwrap();
                 match self.receiver.recv() {
                     Ok(x) => {
@@ -279,8 +260,10 @@ impl Manager {
                         let data = Arc::clone(&self.game.state);
                         
                         let player = Arc::clone(p);
+                        let (send, recv) = mpsc::channel();
+                        self.working_channel_recv = Some(recv);
                         let worker = thread::spawn(move || {
-                            return player.lock().unwrap().your_turn(data);
+                            return player.lock().unwrap().your_turn(data, send);
                         });
                         drop(locked);
                         self.worker = Some(worker);

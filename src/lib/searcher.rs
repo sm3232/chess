@@ -1,14 +1,23 @@
-use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}};
+use std::{collections::HashMap, sync::{mpsc::{self, Sender}, Arc, Mutex}};
 use crate::lib::{
     chessbyte::ChessByte, cutil::pretty_print::pretty_print_board, eval, motion::Motion, piece::Parity, searchtree::SearchTree
 };
 use super::{heap::{EvaluatedMotion, Heap}, mask::Mask, state::State};
+
+pub struct SearchCheckIn {
+    pub tree: SearchTree,
+    pub cache_saves: usize,
+    pub positions_looked_at: usize
+}
 
 pub struct SearchDriver {
     pub parity: Parity,
     pub depth: usize,
     pub nodes: usize,
     pub q_nodes: usize,
+    pub cache_saves: usize,
+    pub positions_looked_at: usize,
+    pub comm: Option<Sender<SearchCheckIn>>
 }
 
 impl SearchDriver {
@@ -17,18 +26,19 @@ impl SearchDriver {
         self.depth = 0;
         self.nodes = 0;
         self.q_nodes = 0;
+        self.cache_saves = 0;
+        self.positions_looked_at = 0;
+    }
+    pub fn communicate_on(&mut self, comms: mpsc::Sender<SearchCheckIn>) -> () {
+        self.comm = Some(comms);
     }
 }
+impl Default for SearchDriver { fn default() -> Self { Self { cache_saves: 0, positions_looked_at: 0, depth: 0, nodes: 0, q_nodes: 0, parity: Parity::WHITE, comm: None } } }
 
 pub struct Searcher {
     pub tree: Vec<Arc<Mutex<SearchTree>>>,
     pub ply: usize,
-    pub primary: Parity,
-    pub heap: Heap,
-    pub echo_table: HashSet<u64>,
     pub tt: HashMap<u64, (EvaluatedMotion, usize)>,
-    pub cache_saves: usize,
-    pub analyzed: usize,
     pub driver: SearchDriver,
     pub mtm: Motion
 }
@@ -142,7 +152,7 @@ impl Searcher {
         let mut heap = Heap::default();
         let mut raised = false;
         let mut ndepth = depth - 1;
-        let mut reduce = 1;
+        let mut reduce = 0;
         let mut best = EvaluatedMotion::default();
         println!("Analyzer sorting moves");
         for m in &moves {
