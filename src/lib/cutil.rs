@@ -1,7 +1,7 @@
 pub mod draw {
     use eframe::egui::{self, Painter};
     use crate::lib::{
-        chessbyte::ChessByte, game, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point
+        boardarray::BoardArray, chessbyte::ChessByte, game, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point
     };
 
     pub fn visual_weight_remap_table(piece: PieceByte) -> (i32, i32) {
@@ -53,7 +53,7 @@ pub mod draw {
             if byte == 0 {
                 continue;
             }
-            let mut path = "file:///home/sm/assm/final/rust/final-1/assets/".to_string();
+            let mut path = "file:///home/sm/assm/final/rust/chess/assets/".to_string();
             if byte.get_parity() == Parity::WHITE { path.push_str("light/") } else { path.push_str("dark/") };
             path.push_str(&byte.get_piece().to_string().to_lowercase());
             path.push_str(".png");
@@ -108,10 +108,11 @@ pub mod pretty_print {
     use stanza::renderer::console::{Console, Decor};
     use stanza::renderer::Renderer;
     use stanza::style::{ HAlign, Header, MaxWidth, MinWidth, Styles};
-    use stanza::table::{ Col, Row, Table};
+    use stanza::table::{ Cell, Col, Content, Row, Table};
     use crate::lib::chessbyte::ChessByte;
     use crate::lib::eval::{EvaluationTerm, Evaluator};
-    use crate::lib::mask::Mask;
+    use crate::lib::mask::{DepthMask, Mask, ValueMask};
+    use crate::lib::maskset::MaskSet;
     use crate::lib::motion::Motion;
 
     #[allow(dead_code)]
@@ -132,18 +133,42 @@ pub mod pretty_print {
         })).into();
     }
     */
-    fn board_to_table(b: &[u8; 64]) -> stanza::table::Table {
-        return Table::with_styles(
-            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
-        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
-            let mut cells = Vec::<char>::new();
-            for col in 0..8 {
-                cells.push(b[i * 8 + col].to_letter());
-            }
-            return Row::from(cells);
-        })).into()
+    pub fn maskset_to_table(title: &str, maskset: &MaskSet) -> Table {
+        return table_with_title(title, 
+            Table::with_styles(Styles::default()).with_cols(vec![
+                Col::default(),
+                Col::default(),
+                Col::default()
+            ]).with_row(
+                Row::new(Styles::default(), vec![
+                    table_with_title("White", mask_to_table(&maskset.white)).into(),
+                    table_with_title("Black", mask_to_table(&maskset.black)).into(),
+                    table_with_title("All", mask_to_table(&maskset.all)).into()
+                ])
+            )
+        )
+
     }
-    
+    fn table_with_title(title: &str, table: Table) -> Table {
+        let mut wrapper = Table::with_styles(Styles::default().with(HAlign::Centred));
+        wrapper.push_row(Row::from([String::from(title)]));
+        wrapper.push_row(Row::new(Styles::default(), vec![table.into()]));
+        return wrapper;
+    }
+    fn board_to_table(title: &str, b: &[u8; 64]) -> stanza::table::Table {
+        return table_with_title(title, 
+            Table::with_styles(
+                Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
+            ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
+                let mut cells = Vec::<char>::new();
+                for col in 0..8 {
+                    cells.push(b[i * 8 + col].to_letter());
+                }
+                return Row::from(cells);
+            }))
+        );
+    }
+
     fn moveset_to_table(m: &[Vec<Motion>; 64]) -> stanza::table::Table {
         let mut mask = Mask::default();
         for i in 0..64 {
@@ -153,38 +178,60 @@ pub mod pretty_print {
         }
         return mask_to_table(&mask);
     }
-    fn masks_to_table(m1: &Mask, m2: &Mask) -> stanza::table::Table {
-        let bv1 = &mut m1.raw.to_ne_bytes();
-        let bv2 = &mut m2.raw.to_ne_bytes();
-        return Table::with_styles(
-            Styles::default()
-        ).with_cols(vec![Col::default(), Col::default()]).with_row(Row::new(Styles::default(), vec![
-            Table::with_styles(Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
-                let mut cells = Vec::<char>::new();
-                for bit in 0..8 {
-                    if bv1[i] & (1 << bit) != 0 {
-                        cells.push('1');
-                    } else {
-                        cells.push('0');
-                    }
-                }
-                return Row::from(cells);
-            })).into(),
-            Table::with_styles(Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
-                let mut cells = Vec::<char>::new();
-                for bit in 0..8 {
-                    if bv2[i] & (1 << bit) != 0 {
-                        cells.push('1');
-                    } else {
-                        cells.push('0');
-                    }
-                }
-                return Row::from(cells);
-            })).into()
-        ]));
+    fn masks_to_table(title: &str, masks: &Vec<(&str, &Mask)>) -> stanza::table::Table {
+        let mut cols = vec![];
+        let mut tbls = vec![];
+        for i in 0..masks.len() {
+            cols.push(Col::default());
+            tbls.push(table_with_title(masks[i].0, mask_to_table(masks[i].1)).into())
+        }
+        return table_with_title(title, 
+            Table::with_styles(Styles::default()).with_cols(
+                cols
+            ).with_row(
+                Row::new(Styles::default(), tbls)
+            )
+        );
     }
-    #[allow(dead_code)]
-    fn mask_to_table(m: &Mask) -> stanza::table::Table {
+    pub fn value_mask_to_table(title: &str, m: &ValueMask) -> stanza::table::Table {
+        return table_with_title(title, Table::with_styles(
+            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
+        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
+            let mut cells = Vec::<i8>::new();
+            for bit in 0..8 {
+                cells.push(m[i * 8 + bit]);
+            }
+            return Row::from(cells);
+        })).into()
+        );
+    }
+    pub fn depth_mask_to_table(m: &DepthMask) -> stanza::table::Table {
+        let bv = &m.raw.to_ne_bytes();
+        return Table::with_styles(
+            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
+        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
+            let mut cells = Vec::<char>::new();
+            for bit in 0..8 {
+                if bv[i] & (1 << bit) != 0 {
+                    if bv[i + 8] & (1 << bit) != 0 {
+                        cells.push('2');
+                    } else {
+                        cells.push('1');
+                    }
+                } else if bv[i + 8] & (1 << bit) != 0 {
+                    if bv[i] & (1 << bit) != 0 {
+                        cells.push('2');
+                    } else {
+                        cells.push('1');
+                    }
+                } else {
+                    cells.push('0');
+                }
+            }
+            return Row::from(cells);
+        })).into()
+    }
+    pub fn mask_to_table(m: &Mask) -> stanza::table::Table {
         let bv = &mut m.raw.to_ne_bytes();
         return Table::with_styles(
             Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
@@ -201,72 +248,82 @@ pub mod pretty_print {
         })).into()
     }
     pub fn eval_to_table(evaluator: &Evaluator) -> stanza::table::Table {
+        let mut wt = 0;
+        let mut bt = 0;
         return Table::with_styles(
             Styles::default()
         ).with_cols(vec![
-            Col::new(Styles::default().with(HAlign::Left).with(MinWidth(10))),
-            Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
-            Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
-            Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
+        Col::new(Styles::default().with(HAlign::Left).with(MinWidth(10))),
+        Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
+        Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
+        Col::new(Styles::default().with(HAlign::Right).with(MinWidth(10))),
         ]).with_row(Row::new(Styles::default().with(Header(true)), vec!["Term".into(), "White".into(), "Black".into(), "+/-".into()])).with_rows(
-            (0..evaluator.scores.len()).map(|i| {
-                return Row::new(Styles::default(), vec![
-                    evaluator.scores[i].name.to_string().into(),
-                    evaluator.scores[i].white_score.to_string().into(),
-                    evaluator.scores[i].black_score.to_string().into(),
-                    (evaluator.scores[i].white_score + evaluator.scores[i].black_score).to_string().into(),
-                ]);
-            })
-        )
+        (0..evaluator.scores.len()).map(|i| {
+            wt += evaluator.scores[i].white_score;
+            bt += evaluator.scores[i].black_score;
+            return Row::new(Styles::default(), vec![
+                evaluator.scores[i].name.to_string().into(),
+                evaluator.scores[i].white_score.to_string().into(),
+                evaluator.scores[i].black_score.to_string().into(),
+                (evaluator.scores[i].white_score + evaluator.scores[i].black_score).to_string().into(),
+            ]);
+        })
+        ).with_row(Row::new(Styles::default().with(Header(true)), vec!["Total".into(), wt.to_string().into(), bt.to_string().into(), (wt + bt).to_string().into()]))
     } 
     /*
-    #[allow(dead_code)]
-    fn info_to_rows(p: Rc<RefCell<Box<dyn TPiece>>>, piece_m: &Mask, o: Rc<RefCell<Box<dyn TPiece>>>, other_m: &Mask) -> Vec<Row>{
-        return vec![
-            Row::new(
-                Styles::default(),
-                vec![
-                    p.borrow().into(),
-                    piece_m.to_point_or_00().into(),
-                    o.borrow().into(),
-                    other_m.to_point_or_00().into(),
-                ]
-            ),
-            Row::new(
-                Styles::default(),
-                vec![
-                    piece_to_table(p).into(),
-                    mask_to_table(piece_m).into(),
-                    piece_to_table(o).into(),
-                    mask_to_table(other_m).into()
-                ]
-            )
-        ];
-    }
+       #[allow(dead_code)]
+       fn info_to_rows(p: Rc<RefCell<Box<dyn TPiece>>>, piece_m: &Mask, o: Rc<RefCell<Box<dyn TPiece>>>, other_m: &Mask) -> Vec<Row>{
+       return vec![
+       Row::new(
+       Styles::default(),
+       vec![
+       p.borrow().into(),
+       piece_m.to_point_or_00().into(),
+       o.borrow().into(),
+       other_m.to_point_or_00().into(),
+       ]
+       ),
+       Row::new(
+       Styles::default(),
+       vec![
+       piece_to_table(p).into(),
+       mask_to_table(piece_m).into(),
+       piece_to_table(o).into(),
+       mask_to_table(other_m).into()
+       ]
+       )
+       ];
+       }
     /*
     pub fn pretty_print_future(using: Rc<RefCell<Box<dyn TPiece>>>, usings_move: &Mask, other_piece: Rc<RefCell<Box<dyn TPiece>>>, others_moves: &Mask){ 
-        let frame = Table::with_styles(
-            Styles::default()
-        ).with_cols(vec![
-            Col::default(),
-            Col::default()
-        ]).with_row(Row::from(["This piece", "Can move to", "Which gives this piece", "These moves"])).with_rows(
-            info_to_rows(using, usings_move, other_piece, others_moves)
-        );
-        println!("{}", Console::default().render(&frame));
+    let frame = Table::with_styles(
+    Styles::default()
+    ).with_cols(vec![
+    Col::default(),
+    Col::default()
+    ]).with_row(Row::from(["This piece", "Can move to", "Which gives this piece", "These moves"])).with_rows(
+    info_to_rows(using, usings_move, other_piece, others_moves)
+    );
+    println!("{}", Console::default().render(&frame));
     }*/
     */
 
-    pub fn pretty_string_evaluator(evaluator: &Evaluator) -> String {
-        let renderer = Console({
-            let mut decor = Decor::default();
-            decor.draw_outer_border = false;
-            decor
-        });
-        return format!("{}", renderer.render(&eval_to_table(evaluator)));
+        pub fn pretty_string_evaluator(evaluator: &Evaluator) -> String {
+            let renderer = Console({
+                let mut decor = Decor::default();
+                decor.draw_outer_border = false;
+                decor
+            });
+            return format!("{}", renderer.render(&eval_to_table(evaluator)));
+        }
+    pub fn pretty_print_value_mask(title: &str, mask: &ValueMask) -> () {
+        println!("{}", Console::default().render(&value_mask_to_table(title, &mask)));
     }
-    pub fn pretty_print_masks(mask1: &Mask, mask2: &Mask) -> () {
-        println!("{}", Console::default().render(&masks_to_table(mask1, mask2)));
+    pub fn pretty_print_maskset(title: &str, maskset: &MaskSet) -> () {
+        println!("{}", Console::default().render(&maskset_to_table(title, maskset)));
+    }
+    pub fn pretty_print_masks(title: &str, masks: &Vec<(&str, &Mask)>) -> () {
+        println!("{}", Console::default().render(&masks_to_table(title, masks)));
     }
     pub fn pretty_print_mask(mask: &Mask) -> () {
         println!("{}", Console::default().render(&mask_to_table(mask)));
@@ -274,7 +331,7 @@ pub mod pretty_print {
     pub fn pretty_print_moveset(moveset: &[Vec<Motion>; 64]) -> () {
         println!("{}", Console::default().render(&moveset_to_table(moveset)));
     }
-    pub fn pretty_print_board(board: &[u8; 64]) -> () {
-        println!("{}", Console::default().render(&board_to_table(board)));
+    pub fn pretty_print_board(title: &str, board: &[u8; 64]) -> () {
+        println!("{}", Console::default().render(&board_to_table(title, board)));
     }
 }

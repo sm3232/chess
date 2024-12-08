@@ -1,20 +1,20 @@
 use std::{cell::RefCell, rc::Rc, sync::{Arc, Mutex}};
 
 use crate::lib::{
-    chessbyte::ChessByte,
-    mask::Mask, maskset::MaskSet, piece::{
+    chessbyte::ChessByte, cutil::pretty_print::pretty_print_board, mask::Mask, maskset::MaskSet, piece::{
         Parity, PieceByte
     }, point::Point
 };
 
-use super::{motion::Motion, state::{RetainedStateInfo, ARRAY_REPEAT_VALUE}, zobrist::Zobrist};
+use super::{cutil::pretty_print::{pretty_print_mask, pretty_print_masks}, motion::{Motion, MotionSet}, state::{RetainedStateInfo, ARRAY_REPEAT_VALUE}, zobrist::Zobrist};
 
 const BISHOP_DIRS: [Point; 4] = [ Point {x: -1, y: -1 }, Point { x: -1, y: 1 }, Point { x: 1, y: 1 }, Point { x: 1, y: -1 } ];
 const ROOK_DIRS: [Point; 4] = [ Point { x: 0, y: 1 }, Point { x: 0, y: -1 }, Point { x: 1, y: 0 }, Point { x: -1, y: 0 } ];
 
-fn bishop_move(bishop_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
+fn bishop_move(bishop_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> (Mask, Mask) {
     let mut hits = 0b0000_0000;
     let mut move_mask = Mask::default();
+    let mut defense_mask = Mask::default();
     let pos_pos = Point::from_index(bishop_index);
     for i in 1..=8 {
         for k in 0..4 {
@@ -25,6 +25,8 @@ fn bishop_move(bishop_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mas
                     if (*piece_mask & desire_mask).any() {
                         if (*enemy_mask & desire_mask).any() {
                             move_mask |= desire_mask;
+                        } else {
+                            defense_mask |= desire_mask;
                         }
                         hits |= 1 << k;
                     } else {
@@ -36,11 +38,12 @@ fn bishop_move(bishop_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mas
             }
         }
     }
-    return move_mask;
+    return (move_mask, defense_mask);
 }
-fn rook_move(rook_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
+fn rook_move(rook_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> (Mask, Mask) {
     let mut hits = 0b0000_0000;
     let mut move_mask = Mask::default();
+    let mut defense_mask = Mask::default();
     let pos_pos = Point::from_index(rook_index);
     for i in 1..=8 {
         for k in 0..4 {
@@ -51,6 +54,8 @@ fn rook_move(rook_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
                     if (*piece_mask & desire_mask).any() {
                         if (*enemy_mask & desire_mask).any() {
                             move_mask |= desire_mask;
+                        } else {
+                            defense_mask |= desire_mask;
                         }
                         hits |= 1 << k;
                     } else {
@@ -62,16 +67,19 @@ fn rook_move(rook_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
             }
         }
     }
-    return move_mask;
+    return (move_mask, defense_mask);
 }
 #[inline]
-fn queen_move(queen_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
-    return rook_move(queen_index, enemy_mask, piece_mask) | bishop_move(queen_index, enemy_mask, piece_mask);
+fn queen_move(queen_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> (Mask, Mask) {
+    let r = rook_move(queen_index, enemy_mask, piece_mask);
+    let b = bishop_move(queen_index, enemy_mask, piece_mask);
+    return (r.0 | b.0, r.1 | b.1);
 }
-fn pawn_move(pawn_index: usize, enemy_mask: &Mask, piece_mask: &Mask, parity: Parity, ignore_diagonal_enemy_requirement: bool, enpassant: &Mask) -> Mask {
+fn pawn_move(pawn_index: usize, enemy_mask: &Mask, piece_mask: &Mask, parity: Parity, ignore_diagonal_enemy_requirement: bool, enpassant: &Mask) -> (Mask, Mask) {
     let mut move_mask = Mask::default();
+    let mut defense_mask = Mask::default();
     if pawn_index < 8 || pawn_index > 55 {
-        return move_mask;
+        return (move_mask, defense_mask);
     }
     let pos_mask = Mask::from_index(pawn_index);
     let basic = Mask { raw: if parity == Parity::WHITE { pos_mask.raw >> 8 } else { pos_mask.raw << 8 } };
@@ -89,6 +97,9 @@ fn pawn_move(pawn_index: usize, enemy_mask: &Mask, piece_mask: &Mask, parity: Pa
 
     let diag1 = pos_pos + Point { x: 1, y: ydir };
     if diag1.valid() {
+        if (*piece_mask & diag1).any() && (*enemy_mask & diag1).none() {
+            defense_mask |= diag1;
+        }
         if (*enemy_mask & diag1).any() || ignore_diagonal_enemy_requirement {
             move_mask |= diag1;
         } else if (*piece_mask & *enpassant).none() && (*enpassant & diag1).any() {
@@ -97,26 +108,18 @@ fn pawn_move(pawn_index: usize, enemy_mask: &Mask, piece_mask: &Mask, parity: Pa
     }
     let diag2 = pos_pos + Point { x: -1, y: ydir };
     if diag2.valid() {
+        if (*piece_mask & diag2).any() && (*enemy_mask & diag2).none() {
+            defense_mask |= diag2;
+        }
         if (*enemy_mask & diag2).any() || ignore_diagonal_enemy_requirement {
             move_mask |= diag2;
         } else if (*piece_mask & *enpassant).none() && (*enpassant & diag2).any() {
             move_mask |= diag2;
         }
     }
-    /*
-    if pawn_index % 8 < 7 {
-        let diag = Mask { raw: if parity == Parity::WHITE { basic.raw <> 1 } else { basic.raw << 1 } };
-    }
-    if pawn_index % 8 > 0 {
-        let diag = Mask { raw: if parity == Parity::WHITE { basic.raw << 1 } else { basic.raw >> 1 } };
-        if (*enemy_mask & diag).any() {
-            move_mask |= diag;
-        }
-    }
-    */
-    return move_mask;
+    return (move_mask, defense_mask);
 }
-fn knight_move(knight_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
+fn knight_move(knight_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> (Mask, Mask) {
     let mut move_mask = Mask::default();
     let pos_pos = Point::from_index(knight_index);
     let offsets = [
@@ -137,11 +140,12 @@ fn knight_move(knight_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mas
             // move_mask |= Mask { raw: if offset.0 < 0 { pos_mask.raw >> (offset.1 * -8) } else { pos_mask.raw << (offset.1 * 8) } };
         }
     }
-    return move_mask & (enemy_mask.get_not() & *piece_mask).get_not();
+    return (move_mask & (enemy_mask.get_not() & *piece_mask).get_not(), move_mask & *piece_mask & enemy_mask.get_not());
     
 }
-fn king_move(king_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
+fn king_move(king_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> (Mask, Mask) {
     let mut move_mask = Mask::default();
+    let mut defense_mask = Mask::default();
     let pos_mask = Mask::from_index(king_index);
     let mut maxx = 2i32;
     let mut minx = -1i32;
@@ -158,13 +162,19 @@ fn king_move(king_index: usize, enemy_mask: &Mask, piece_mask: &Mask) -> Mask {
         for x in minx..maxx {
             if x == 0 && y == 0 { continue };
             let thispos = Mask::from_index((king_index as i32 + y * 8 + x) as usize);
-            if (*piece_mask & thispos).none() || (*enemy_mask & thispos).any() {
+            if (*piece_mask & thispos).any() {
+                if (*enemy_mask & thispos).any() {
+                    move_mask |= thispos;
+                } else {
+                    defense_mask |= thispos;
+                }
+            } else {
                 move_mask |= thispos;
             }
         }
     }
 
-    return move_mask;
+    return (move_mask, defense_mask);
 }
 
 fn bishop_xray(bishop_index: usize) -> Mask {
@@ -269,18 +279,47 @@ impl std::ops::Index<Point> for [u8; 64] {
         return &self[((index.y * 8) + index.x) as usize];
     }
 }
+pub enum MoveType {
+    ENPASSANT,
+    PROMOTION,
+    CASTLE,
+    TAKE,
+    MOVE
+}
 pub trait BoardArray {
     fn get_xrays(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64];
-    fn get_moves(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64];
+    // fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> [Vec<Motion>; 64];
     fn flipped(&self) -> Self;
     fn make(&mut self, from: usize, to: usize, zobrist: Arc<Mutex<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo);
+    fn make_soft(&mut self, from: usize, to: usize) -> [u8; 64]; 
     fn unmake(&mut self, original_board: &[u8; 64], original_info: &RetainedStateInfo, current_info: &mut RetainedStateInfo) -> ();
-    fn get_moves_shallow_ipd(&self, ally_parity: Parity, info: &RetainedStateInfo) -> Mask;
+    // fn get_moves_shallow_ipd(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask;
     fn index_in_check(&self, index: usize, ip: Parity, info: &RetainedStateInfo) -> bool;
+    // fn fast_moves(&self, maskset: &MaskSet, enpassant: &Mask) -> [Mask; 64];
+    // fn flat_fast_moves(&self, maskset: &MaskSet, enpassant: &Mask) -> MaskSet;
+    // fn defense(&self, maskset: &MaskSet, enpassant: &Mask) -> (MaskSet, MaskSet);
+    fn get_motions(&self, maskset: &MaskSet, enpassant: &Mask, castles: Option<u8>) -> MotionSet;
+    fn get_specific_motions(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask;
+    fn king_in_check(&self, king_index: usize, maskset: &MaskSet, enpassant: &Mask) -> bool;
+    fn get_kings(&self) -> [usize; 2];
 }
 impl BoardArray for [u8; 64] {
+    fn get_kings(&self) -> [usize; 2] {
+        let mut kings = [65usize; 2];
+        for i in 0..64 {
+            if self[i].is_w_king() {
+                kings[0] = i;
+            } else if self[i].is_b_king() {
+                kings[1] = i;
+            }
+        }
+        return kings;
+    }
     fn index_in_check(&self, index: usize, ip: Parity, info: &RetainedStateInfo) -> bool {
-        return (Mask::from_index(index) & self.get_moves_shallow_ipd(!ip, info)).any()
+        return (Mask::from_index(index) & self.get_specific_motions(!ip, &info.maskset, &info.enpassant_mask)).any();
+    }
+    fn king_in_check(&self, king_index: usize, maskset: &MaskSet, enpassant: &Mask) -> bool {
+        return (Mask::from_index(king_index) & self.get_specific_motions(!self[king_index].get_parity(), maskset, enpassant)).any();
     }
     fn unmake(&mut self, original_board: &[u8; 64], original_info: &RetainedStateInfo, current_info: &mut RetainedStateInfo) -> () {
         *self = *original_board;
@@ -297,6 +336,46 @@ impl BoardArray for [u8; 64] {
             allowed_castles: original_info.allowed_castles,
             enpassant_mask: original_info.enpassant_mask
         };
+    }
+
+
+    fn make_soft(&mut self, from: usize, to: usize) -> [u8; 64] {
+        let og = self.clone();
+        let is_enpassant = self[from].is_pawn() && !self[to].is_piece() && from % 8 != to % 8;
+        let is_promotion = self[from].is_pawn() && (to < 8 || to > 55);
+        let is_castle = self[to].is_piece() && self[from].same_parity(&self[to]) && self[from].is_king() && self[to].is_rook();
+        let is_take = self[to].is_piece() && !self[to].same_parity(&self[from]);
+        if is_enpassant {
+            if from > to { self[to + 8] = 0 } else { self[to - 8] = 0 };
+            self.swap(from, to);
+            self[to] |= 0b1000_0000;
+        } else if is_promotion {
+            self.swap(from, to);
+            self[to] ^= 0b0000_0110;
+            self[to] |= 0b1000_0000;
+            self[from] = 0;
+        } else if is_castle {
+            if from > to {
+                self.swap(from, from - 2);
+                self.swap(to, from - 1);
+                self[from - 2] |= 0b1000_0000;
+                self[from - 1] |= 0b1000_0000;
+            } else {
+                self.swap(from, from + 2);
+                self.swap(to, from + 1);
+                self[from + 2] |= 0b1000_0000;
+                self[from + 1] |= 0b1000_0000;
+            }
+        } else if is_take {
+            self.swap(from, to);
+            self[from] = 0;
+            self[to] |= 0b1000_0000;
+        } else {
+            self.swap(from, to);
+            self[to] |= 0b1000_0000;
+            self[from] = 0;
+        }
+        return og;
     }
     fn make(&mut self, from: usize, to: usize, zobrist: Arc<Mutex<Zobrist>>, current_info: &mut RetainedStateInfo, debugging_enabled: bool) -> ([u8; 64], RetainedStateInfo) {
         let original_info = current_info.clone();
@@ -411,50 +490,300 @@ impl BoardArray for [u8; 64] {
         }
 
         current_info.maskset = MaskSet::from_board(self);
-        drop(zrist);
         return (original_board, original_info);
     }
     fn flipped(&self) -> Self {
         let mut array: [u8; 64] = [0u8; 64];
-        for y in 0..8 {
-            for x in 0..8 {
-                array[(7 - y) * 8 + x] = self[y * 8 + x] ^ 0b0000_1000;
+        let mut temp: [u64; 8] = [0u64; 8];
+        for i in 0..8 {
+            let index = i * 8;
+            temp[i] = u64::from_ne_bytes([
+                self[index],
+                self[index + 1], 
+                self[index + 2], 
+                self[index + 3], 
+                self[index + 4], 
+                self[index + 5], 
+                self[index + 6], 
+                self[index + 7]
+            ]);
+        }
+        temp.reverse();
+
+        for i in 0..8 {
+            let mut k = 0;
+            for byte in &temp[i].to_ne_bytes(){
+                array[i * 8 + k] = *byte;
+                if array[i * 8 + k].is_piece() {
+                    array[i * 8 + k] ^= 0b0000_1000;
+                }
+                k += 1;
             }
         }
         return array;
     }
 
-    fn get_moves_shallow_ipd(&self, ally_parity: Parity, info: &RetainedStateInfo) -> Mask {
-        let enemy = if ally_parity == Parity::WHITE { &info.maskset.black } else { &info.maskset.white };
+    /*
+    fn get_moves_shallow_ipd(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask {
+        let enemy = if ally_parity == Parity::WHITE { &maskset.black } else { &maskset.white };
         let mut mask = Mask::default();
         for (index, byte) in self.iter().enumerate() {
             if byte.is_parity(ally_parity) {
                 mask |= match byte.get_piece() {
-                    PieceByte::ROOK => rook_move(index, enemy, &info.maskset.all),
-                    PieceByte::BISHOP => bishop_move(index, enemy, &info.maskset.all),
-                    PieceByte::QUEEN => queen_move(index, enemy, &info.maskset.all),
-                    PieceByte::PAWN => pawn_move(index, enemy, &info.maskset.all, ally_parity, true, &info.enpassant_mask),
-                    PieceByte::KNIGHT => knight_move(index, enemy, &info.maskset.all),
-                    PieceByte::KING => king_move(index, enemy, &info.maskset.all),
+                    PieceByte::ROOK => rook_move(index, enemy, &maskset.all).0,
+                    PieceByte::BISHOP => bishop_move(index, enemy, &maskset.all).0,
+                    PieceByte::QUEEN => queen_move(index, enemy, &maskset.all).0,
+                    PieceByte::PAWN => pawn_move(index, enemy, &maskset.all, ally_parity, true, &enpassant).0,
+                    PieceByte::KNIGHT => knight_move(index, enemy, &maskset.all).0,
+                    PieceByte::KING => king_move(index, enemy, &maskset.all).0,
                     PieceByte::NONE => mask
                 }
             }
         }
         return mask;
     }
+    */
 
-    fn get_moves(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64] {
-        let enemy = if ally_parity == Parity::WHITE { &info.maskset.black } else { &info.maskset.white };
+    /*
+    fn defense(&self, maskset: &MaskSet, enpassant: &Mask) -> (MaskSet, MaskSet) {
+        let mut i = 0;
+        let mut set = MaskSet::default();
+        let mut pset = MaskSet::default();
+        for byte in self {
+            let enemy = if byte.get_parity() == Parity::WHITE { &maskset.white } else { &maskset.black };
+            let m = if byte.get_parity() == Parity::WHITE { &mut set.white } else { &mut set.black };
+            let pm = if byte.get_parity() == Parity::WHITE { &mut pset.white } else { &mut pset.black };
+            match byte.get_piece() {
+                PieceByte::ROOK => *m |= rook_move(i, enemy, &maskset.all),
+                PieceByte::BISHOP => *m |= bishop_move(i, enemy, &maskset.all),
+                PieceByte::QUEEN => *m |= queen_move(i, enemy, &maskset.all),
+                PieceByte::PAWN => *pm |= pawn_move(i, enemy, &maskset.all, byte.get_parity(), true, &enpassant),
+                PieceByte::KNIGHT => *m |= knight_move(i, enemy, &maskset.all),
+                PieceByte::KING => *m |= king_move(i, enemy, &maskset.all),
+                PieceByte::NONE => ()
+            };
+            i += 1;
+        }
+        set.all = set.black | set.white;
+        pset.all = pset.black | pset.white;
+        return (set, pset);
+    }
+    */
+    fn get_specific_motions(&self, of_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> Mask {
+        let enemy = if of_parity == Parity::WHITE { &maskset.black } else { &maskset.white };
+        let mut mask = Mask::default();
+        for (index, byte) in self.iter().enumerate() {
+            if byte.is_parity(of_parity) {
+                mask |= match byte.get_piece() {
+                    PieceByte::ROOK => rook_move(index, enemy, &maskset.all).0,
+                    PieceByte::BISHOP => bishop_move(index, enemy, &maskset.all).0,
+                    PieceByte::QUEEN => queen_move(index, enemy, &maskset.all).0,
+                    PieceByte::PAWN => pawn_move(index, enemy, &maskset.all, of_parity, true, &enpassant).0,
+                    PieceByte::KNIGHT => knight_move(index, enemy, &maskset.all).0,
+                    PieceByte::KING => king_move(index, enemy, &maskset.all).0,
+                    PieceByte::NONE => mask
+                }
+            }
+        }
+        return mask;
+    }
+    fn get_motions(&self, maskset: &MaskSet, enpassant: &Mask, castles: Option<u8>) -> MotionSet {
+        let mut ms = MotionSet::default();
+        let mut wking = 65;
+        let mut bking = 65;
+        for i in 0..64 {
+            if self[i].is_w_king() {
+                wking = i;
+            } else if self[i].is_b_king() {
+                bking = i;
+            }
+            if wking != 65 && bking != 65 { break };
+        }
+        if wking == 65 || bking == 65 { return ms };
+
+        for (index, byte) in self.iter().enumerate() {
+            let enemy = if byte.get_parity() == Parity::WHITE { &maskset.black } else { &maskset.white };
+            let m = match byte.get_piece() {
+                PieceByte::ROOK => rook_move(index, enemy, &maskset.all),
+                PieceByte::BISHOP => bishop_move(index, enemy, &maskset.all),
+                PieceByte::QUEEN => queen_move(index, enemy, &maskset.all),
+                PieceByte::PAWN => pawn_move(index, enemy, &maskset.all, byte.get_parity(), false, &enpassant),
+                PieceByte::KNIGHT => knight_move(index, enemy, &maskset.all),
+                PieceByte::KING => king_move(index, enemy, &maskset.all),
+                PieceByte::NONE => (Mask::default(), Mask::default())
+            };
+            if byte.is_parity(Parity::WHITE) {
+                for bit in m.0.isolated_bits().iter() {
+                    ms.white_moves[index].push(Motion { from: index, to: bit.as_index() });
+                }
+                for bit in m.1.isolated_bits().iter() {
+                    ms.white_defensive_moves[index].push(Motion { from: index, to: bit.as_index() });
+                }
+            } else if byte.is_parity(Parity::BLACK) {
+                for bit in m.0.isolated_bits().iter() {
+                    ms.black_moves[index].push(Motion { from: index, to: bit.as_index() });
+                }
+                for bit in m.1.isolated_bits().iter() {
+                    ms.black_defensive_moves[index].push(Motion { from: index, to: bit.as_index() });
+                }
+            }
+        }
+        let mut cloned = self.clone();
+        for i in 0..64 {
+            ms.white_moves[i].retain(|m| {
+                let held = cloned.make_soft(m.from, m.to);
+                let sp = cloned.get_specific_motions(Parity::BLACK, &MaskSet::from_board(&cloned), &Mask::default());
+
+                let mut wk = wking;
+                for wki in 0usize.max(wking.checked_sub(9).unwrap_or(0))..64usize.min(wking.checked_add(9).unwrap_or(64)) {
+                    if cloned[wki].is_b_king() {
+                        wk = wki;
+                        break;
+                    }
+                }
+                cloned = held;
+                if (Mask::from_index(wk) & sp).any() {
+                    return false;
+                }
+                return true;
+                 
+            });
+            ms.black_moves[i].retain(|m| {
+                let held = cloned.make_soft(m.from, m.to);
+                let sp = cloned.get_specific_motions(Parity::WHITE, &MaskSet::from_board(&cloned), &Mask::default());
+
+                let mut bk = bking;
+                for bki in 0usize.max(bking.checked_sub(9).unwrap_or(0))..64usize.min(bking.checked_add(9).unwrap_or(64)) {
+                    if cloned[bki].is_b_king() {
+                        bk = bki;
+                        break;
+                    }
+                }
+                cloned = held;
+                if (Mask::from_index(bk) & sp).any() {
+                    return false;
+                }
+                return true;
+            });
+            for m in &ms.white_moves[i] {
+                ms.white_vect.push(*m);
+                let mtom = Mask::from_index(m.to);
+                ms.white_flat |= mtom;
+                ms.white_piecewise_flat[i] |= mtom;
+            }
+            for m in &ms.white_defensive_moves[i] {
+                let mtom = Mask::from_index(m.to);
+                ms.white_defensive_flat |= mtom;
+                ms.white_defensive_piecewise_flat[i] |= mtom;
+            }
+            for m in &ms.black_moves[i] {
+                ms.black_vect.push(*m);
+                let mtom = Mask::from_index(m.to);
+                ms.black_flat |= mtom;
+                ms.black_piecewise_flat[i] |= mtom;
+            }
+            for m in &ms.black_defensive_moves[i] {
+                let mtom = Mask::from_index(m.to);
+                ms.black_defensive_flat |= mtom;
+                ms.black_defensive_piecewise_flat[i] |= mtom;
+            }
+        }
+        if let Some(allowed_castles) = castles {
+            if !ms.white_moves[wking].is_empty() {
+                let pcast = allowed_castles & if wking == 60 { 0b0000_0011 } else { 0b0000_1100 };
+                if pcast > 0 {
+                    let shallow = self.get_specific_motions(Parity::BLACK, maskset, enpassant);
+                    if pcast & 0b0000_0101 != 0 && wking + 2 < 64 {
+                        let mask = Mask::from_index(wking + 1) | Mask::from_index(wking + 2);
+                        if (mask & maskset.all).none() && ((mask | Mask::from_index(wking)) & shallow).none() {
+                            ms.white_moves[wking].push(Motion { from: wking, to: 63 });
+                        }
+                    }
+                    if pcast & 0b0000_1010 != 0 && wking > 2 {
+                        let mask = Mask::from_index(wking - 1) | Mask::from_index(wking - 2);
+                        if ((mask | Mask::from_index(wking - 3)) & maskset.all).none() && ((mask | Mask::from_index(wking)) & shallow).none() {
+                            ms.white_moves[wking].push(Motion { from: wking, to: 56 });
+                        }
+                    }
+                }
+            }
+            if !ms.black_moves[bking].is_empty() {
+                let pcast = allowed_castles & if bking == 60 { 0b0000_0011 } else { 0b0000_1100 };
+                if pcast > 0 {
+                    let shallow = self.get_specific_motions(Parity::WHITE, maskset, enpassant);
+                    if pcast & 0b0000_0101 != 0 && bking + 2 < 64 {
+                        let mask = Mask::from_index(bking + 1) | Mask::from_index(bking + 2);
+                        if (mask & maskset.all).none() && ((mask | Mask::from_index(bking)) & shallow).none() {
+                            ms.black_moves[bking].push(Motion { from: bking, to: 7 });
+                        }
+                    }
+                    if pcast & 0b0000_1010 != 0 && bking > 2 {
+                        let mask = Mask::from_index(bking - 1) | Mask::from_index(bking - 2);
+                        if ((mask | Mask::from_index(bking - 3)) & maskset.all).none() && ((mask | Mask::from_index(bking)) & shallow).none() {
+                            ms.black_moves[bking].push(Motion { from: bking, to: 0 });
+                        }
+                    }
+                }
+            }
+        }
+        
+
+        
+
+        return ms;
+    }
+    /*
+    fn flat_fast_moves(&self, maskset: &MaskSet, enpassant: &Mask) -> MaskSet {
+        let mut i = 0;
+        let mut set = MaskSet::default();
+        for byte in self {
+            let enemy = if byte.get_parity() == Parity::WHITE { &maskset.black } else { &maskset.white };
+            let m = if byte.get_parity() == Parity::WHITE { &mut set.white } else { &mut set.black };
+            *m |= match byte.get_piece() {
+                PieceByte::ROOK => rook_move(i, enemy, &maskset.all).0,
+                PieceByte::BISHOP => bishop_move(i, enemy, &maskset.all).0,
+                PieceByte::QUEEN => queen_move(i, enemy, &maskset.all).0,
+                PieceByte::PAWN => pawn_move(i, enemy, &maskset.all, byte.get_parity(), true, &enpassant),
+                PieceByte::KNIGHT => knight_move(i, enemy, &maskset.all),
+                PieceByte::KING => king_move(i, enemy, &maskset.all),
+                PieceByte::NONE => Mask::default()
+            };
+            i += 1;
+        }
+        set.all = set.black | set.white;
+        return set;
+    }
+    fn fast_moves(&self, maskset: &MaskSet, enpassant: &Mask) -> [Mask; 64] {
+        let mut array = [Mask::default(); 64];
+        let mut i = 0;
+        for byte in self {
+            let enemy = if byte.get_parity() == Parity::WHITE { &maskset.black } else { &maskset.white };
+            array[i] = match byte.get_piece() {
+                PieceByte::ROOK => rook_move(i, enemy, &maskset.all),
+                PieceByte::BISHOP => bishop_move(i, enemy, &maskset.all),
+                PieceByte::QUEEN => queen_move(i, enemy, &maskset.all),
+                PieceByte::PAWN => pawn_move(i, enemy, &maskset.all, byte.get_parity(), true, &enpassant),
+                PieceByte::KNIGHT => knight_move(i, enemy, &maskset.all),
+                PieceByte::KING => king_move(i, enemy, &maskset.all),
+                PieceByte::NONE => Mask::default()
+            };
+            i += 1;
+        }
+        return array;
+    }
+
+    fn get_moves(&self, ally_parity: Parity, maskset: &MaskSet, enpassant: &Mask) -> [Vec<Motion>; 64] {
+        let enemy = if ally_parity == Parity::WHITE { &maskset.black } else { &maskset.white };
         let mut array: [Vec<Motion>; 64] = [ARRAY_REPEAT_VALUE; 64];
         for (index, byte) in self.iter().enumerate() {
             if byte.is_parity(ally_parity) {
                 let m = match byte.get_piece() {
-                    PieceByte::ROOK => rook_move(index, enemy, &info.maskset.all),
-                    PieceByte::BISHOP => bishop_move(index, enemy, &info.maskset.all),
-                    PieceByte::QUEEN => queen_move(index, enemy, &info.maskset.all),
-                    PieceByte::PAWN => pawn_move(index, enemy, &info.maskset.all, ally_parity, false, &info.enpassant_mask),
-                    PieceByte::KNIGHT => knight_move(index, enemy, &info.maskset.all),
-                    PieceByte::KING => king_move(index, enemy, &info.maskset.all),
+                    PieceByte::ROOK => rook_move(index, enemy, &maskset.all),
+                    PieceByte::BISHOP => bishop_move(index, enemy, &maskset.all),
+                    PieceByte::QUEEN => queen_move(index, enemy, &maskset.all),
+                    PieceByte::PAWN => pawn_move(index, enemy, &maskset.all, ally_parity, false, &enpassant),
+                    PieceByte::KNIGHT => knight_move(index, enemy, &maskset.all),
+                    PieceByte::KING => king_move(index, enemy, &maskset.all),
                     PieceByte::NONE => Mask::default()
                 };
                 for bit in m.isolated_bits().iter() {
@@ -464,6 +793,7 @@ impl BoardArray for [u8; 64] {
         }
         return array;
     }
+*/
     fn get_xrays(&self, ally_parity: Parity, info: &RetainedStateInfo) -> [Vec<Motion>; 64] {
         let enemy = if ally_parity == Parity::WHITE { &info.maskset.black } else { &info.maskset.white };
         let mut array: [Vec<Motion>; 64] = [ARRAY_REPEAT_VALUE; 64];

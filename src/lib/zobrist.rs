@@ -4,12 +4,14 @@ use rand_chacha::{rand_core::{RngCore, SeedableRng}, ChaCha8Rng};
 
 use crate::lib::{chessbyte::ChessByte, motion::Motion, piece::{Parity, PieceByte}, state::{RetainedStateInfo, State}};
 
+use super::{eval::Evaluator, motion::MotionSet};
+
 pub struct Zobrist {
     pub zpieces: [[u64; 12]; 64],
     pub zcastles: [u64; 16],
     pub zpassant: [u64; 9],
     pub zside: u64,
-    table: HashMap<u64, (RetainedStateInfo, [Vec<Motion>; 64])>
+    table: HashMap<u64, (RetainedStateInfo, MotionSet, Option<Evaluator>)>
 }
 
 impl Zobrist {
@@ -67,11 +69,11 @@ impl Zobrist {
         return k;
     }
 
-    pub fn save(&mut self, stuff: (RetainedStateInfo, [Vec<Motion>; 64])) -> () {
+    pub fn save(&mut self, stuff: (RetainedStateInfo, MotionSet, Option<Evaluator>)) -> () {
         self.table.insert(stuff.0.zkey, stuff);
     }
 
-    pub fn pull(&self, zkey: u64) -> Option<(RetainedStateInfo, [Vec<Motion>; 64])> {
+    pub fn pull(&self, zkey: u64) -> Option<(RetainedStateInfo, MotionSet, Option<Evaluator>)> {
         return self.table.get(&zkey).cloned();
     }
 }

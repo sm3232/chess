@@ -15,11 +15,25 @@ pub trait ChessByte {
     fn is_kingside(&self) -> bool;
     fn is_queenside(&self) -> bool;
     fn is_king(&self) -> bool;
+    fn is_w_king(&self) -> bool;
+    fn is_b_king(&self) -> bool;
     fn is_rook(&self) -> bool;
+    fn is_w_rook(&self) -> bool;
+    fn is_b_rook(&self) -> bool;
     fn is_pawn(&self) -> bool;
+    fn is_w_pawn(&self) -> bool;
+    fn is_b_piece(&self) -> bool;
+    fn is_w_piece(&self) -> bool;
+    fn is_b_pawn(&self) -> bool;
     fn is_bishop(&self) -> bool;
+    fn is_w_bishop(&self) -> bool;
+    fn is_b_bishop(&self) -> bool;
     fn is_queen(&self) -> bool;
+    fn is_w_queen(&self) -> bool;
+    fn is_b_queen(&self) -> bool;
     fn is_knight(&self) -> bool;
+    fn is_w_knight(&self) -> bool;
+    fn is_b_knight(&self) -> bool;
     fn is_sided(&self) -> bool;
     fn to_letter(&self) -> char;
     fn is_castleable(&self, king_byte: u8, side_check: fn(&u8) -> bool) -> bool;
@@ -32,6 +46,35 @@ pub trait ChessByte {
 }
 
 impl ChessByte for u8 {
+    #[inline(always)]
+    fn is_w_piece(&self) -> bool { self.is_piece() && self.is_white() }
+    #[inline(always)]
+    fn is_b_piece(&self) -> bool { self.is_piece() && self.is_black() }
+    #[inline(always)]
+    fn is_w_king(&self) -> bool { self.is_white() && self.is_king() }
+    #[inline(always)]
+    fn is_b_king(&self) -> bool { self.is_black() && self.is_king() }
+    #[inline(always)]
+    fn is_w_rook(&self) -> bool { self.is_white() && self.is_rook() }
+    #[inline(always)]
+    fn is_b_rook(&self) -> bool { self.is_black() && self.is_rook() }
+    #[inline(always)]
+    fn is_w_pawn(&self) -> bool { self.is_white() && self.is_pawn() }
+    #[inline(always)]
+    fn is_b_pawn(&self) -> bool { self.is_black() && self.is_pawn() }
+    #[inline(always)]
+    fn is_w_queen(&self) -> bool { self.is_white() && self.is_queen() }
+    #[inline(always)]
+    fn is_b_queen(&self) -> bool { self.is_black() && self.is_queen() }
+    #[inline(always)]
+    fn is_w_bishop(&self) -> bool { self.is_white() && self.is_bishop() }
+    #[inline(always)]
+    fn is_b_bishop(&self) -> bool { self.is_black() && self.is_bishop() }
+    #[inline(always)]
+    fn is_w_knight(&self) -> bool { self.is_white() && self.is_knight() }
+    #[inline(always)]
+    fn is_b_knight(&self) -> bool { self.is_black() && self.is_knight() }
+
     #[inline(always)]
     fn is_white(&self) ->       bool { (self & 0b0000_1000) != 0 }
     

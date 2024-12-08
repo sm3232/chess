@@ -3,13 +3,16 @@ use super::motion::Motion;
 #[derive(Copy)]
 pub struct EvaluatedMotion {
     pub evaluation: i32,
-    pub motion: Motion
+    pub motion: Motion,
+    pub key: u64
 }
+impl Default for EvaluatedMotion { fn default() -> Self { Self { evaluation: 0, key: 0, motion: Motion::default() } } }
 impl Clone for EvaluatedMotion {
     fn clone(&self) -> Self {
         Self {
             evaluation: self.evaluation,
-            motion: self.motion
+            motion: self.motion,
+            key: 0,
         }
     }
 }
@@ -31,7 +34,7 @@ type Species = EvaluatedMotion;
 
 pub struct Heap {
     store: Vec<Species>,
-    size: usize
+    pub size: usize
 }
 impl Default for Heap {
     fn default() -> Self { Self { store: Vec::new(), size: 0 } }
@@ -83,6 +86,11 @@ impl Heap {
             self.store.swap(i, max);
             self.sift(max);
         }
+    }
+
+    pub fn clear(&mut self) -> () {
+        self.store.clear();
+        self.size = 0;
     }
 
     pub fn push(&mut self, v: Species) -> () {

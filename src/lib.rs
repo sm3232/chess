@@ -1,3 +1,5 @@
+#![feature(unbounded_shifts)]
+#![feature(array_chunks)]
 pub mod lib {
     pub mod cutil;
     pub mod ui;

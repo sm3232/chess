@@ -24,7 +24,7 @@ pub struct ChessGame {
     pub selected: usize,
     pub state: Arc<Mutex<State>>,
     pub game_over: bool,
-    pub players: (Option<Arc<dyn Player>>, Option<Arc<dyn Player>>),
+    pub players: (Option<Arc<Mutex<dyn Player>>>, Option<Arc<Mutex<dyn Player>>>),
     pub human_player: Parity,
     pub state_history: Vec<Arc<Mutex<State>>>,
     pub tree: Option<Arc<Mutex<SearchTree>>>,
@@ -154,13 +154,13 @@ impl ChessGame {
         return false;
     }
     */
-    pub fn register_players(&mut self, p1: Option<Arc<dyn Player>>, p2: Option<Arc<dyn Player>>) -> () {
+    pub fn register_players(&mut self, p1: Option<Arc<Mutex<dyn Player>>>, p2: Option<Arc<Mutex<dyn Player>>>) -> () {
         self.players.0 = p1;
         self.players.1 = p2;
         match (self.players.0.is_some(), self.players.1.is_some()) {
             (true, true) => self.human_player = Parity::NONE,
-            (true, false) => self.human_player = !self.players.0.clone().unwrap().get_parity(),
-            (false, true) => self.human_player = !self.players.1.clone().unwrap().get_parity(),
+            (true, false) => self.human_player = !self.players.0.as_ref().unwrap().lock().unwrap().get_parity(),
+            (false, true) => self.human_player = !self.players.1.as_ref().unwrap().lock().unwrap().get_parity(),
             (false, false) => self.human_player = Parity::BOTH
         };
 
@@ -173,7 +173,7 @@ impl ChessGame {
             let piece_at_input = locked.get_piece_at_index(pos_index);
             if current_selection != 0 && self.selected != 65 {
                 if locked.board[self.selected].get_parity() == locked.turn {
-                    let moves = locked.moves[self.selected].clone();
+                    let moves = if locked.turn == Parity::WHITE { locked.moves.white_moves[self.selected].clone() } else { locked.moves.black_moves[self.selected].clone() };
                     for m in moves.iter() {
                         if m.to == pos_index {
                             locked.make_motion(m, true);

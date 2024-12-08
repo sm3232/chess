@@ -2,6 +2,7 @@ use std::sync::Mutex;
 use std::{cell::RefCell, sync::Arc};
 use std::rc::Rc;
 
+use crate::lib::cutil::pretty_print::pretty_print_masks;
 use crate::lib::{
     cutil::pretty_print::{pretty_print_board, pretty_print_mask, pretty_print_moveset},
     boardarray::BoardArray, chessbyte::ChessByte, mask::Mask, maskset::MaskSet, piece::{ 
@@ -10,6 +11,8 @@ use crate::lib::{
     motion::Motion
 };
 
+use super::cutil::pretty_print::pretty_print_maskset;
+use super::motion::MotionSet;
 use super::searchtree::SearchTree;
 
 pub struct RetainedStateInfo {
@@ -45,15 +48,24 @@ impl Clone for RetainedStateInfo {
         };
     }
 }
+pub struct PartialState {
+    pub board: [u8; 64],
+    pub allowed_castles: u8,
+    pub enpassant_mask: Mask,
+    pub maskset: MaskSet,
+    pub king_indices: [usize; 2]
+}
 
 
 pub struct State {
     pub board: [u8; 64],
-    pub moves: [Vec<Motion>; 64],
+    pub moves: MotionSet,
     pub turn: Parity,
     pub zobrist: Arc<Mutex<Zobrist>>,
     pub info: RetainedStateInfo,
     pub tree_root: Option<Arc<Mutex<SearchTree>>>,
+    pub num_cached: usize,
+    pub num_analyzed: usize,
     held_info: Vec<RetainedStateInfo>,
     held_boards: Vec<[u8; 64]>
 }
@@ -61,14 +73,16 @@ pub const ARRAY_REPEAT_VALUE: Vec<Motion> = Vec::new();
 impl Default for State {
     fn default() -> Self {
         Self {
-            moves: [ARRAY_REPEAT_VALUE; 64],
+            moves: MotionSet::default(),
             turn: Parity::NONE,
             board: [0u8; 64],
             zobrist: Arc::new(Mutex::new(Zobrist::init())),
             tree_root: None,
             held_info: Vec::new(),
             info: RetainedStateInfo::default(),
-            held_boards: Vec::new()
+            held_boards: Vec::new(),
+            num_analyzed: 0,
+            num_cached: 0
         }
     }
 }
@@ -82,14 +96,14 @@ impl State {
         self.held_boards.push(held.0);
         self.held_info.push(held.1);
         self.turn = !self.turn;
-        self.hydrate();
+        self.hydrate(debugging_enabled);
     }
     pub fn make_move(&mut self, from: usize, to: &Mask, debugging_enabled: bool) {
         let held = self.board.make(from, to.as_index(), self.zobrist.clone(), &mut self.info, debugging_enabled);
         self.held_boards.push(held.0);
         self.held_info.push(held.1);
         self.turn = !self.turn;
-        self.hydrate();
+        self.hydrate(debugging_enabled);
     }
     pub fn unmake_last(&mut self, do_turn_switch: bool) {
         if let Some(argsinfo) = self.held_info.pop() {
@@ -102,7 +116,7 @@ impl State {
                 if let Some(cached) = cached_option {
                     self.moves = cached.1;
                 } else {
-                    self.hydrate();
+                    self.hydrate(false);
                 }
                 return;
             }
@@ -127,10 +141,11 @@ impl State {
             panic!("Could not find kings in board! Attempted white index: {}, attempted black index: {}", self.info.king_indices[0], self.info.king_indices[1]);
         }
         drop(zrist);
-        self.hydrate();
+        self.hydrate(true);
     }
-    pub fn threatened_by_enemy(&self, mask: &Mask) -> bool {
-        return (*mask & self.board.get_moves_shallow_ipd(!self.turn, &self.info)).any();
+    /*
+    pub fn threatened_by_enemy(&self, mask: &Mask, turn: Parity) -> bool {
+        return (*mask & self.board.get_moves_shallow_ipd(turn, &self.info.maskset, &self.info.enpassant_mask)).any();
     }
     pub fn king_in_check(&self, kp: Parity) -> bool {
         let mut kpi = 65;
@@ -140,10 +155,39 @@ impl State {
                 break;
             }
         }
-        return kpi == 65 || (Mask::from_index(kpi) & self.board.get_moves_shallow_ipd(!kp, &self.info)).any();
+        return kpi == 65 || (Mask::from_index(kpi) & self.board.get_moves_shallow_ipd(!kp, &self.info.maskset, &self.info.enpassant_mask)).any();
     }
+    */
+    pub fn partial_flipped(&self) -> PartialState {
+        let flip = self.board.flipped();
+        return PartialState {
+            board: flip,
+            enpassant_mask: self.info.enpassant_mask.flipped(),
+            allowed_castles: {
+                let low = self.info.allowed_castles & 0b0000_0011;
+                let high = self.info.allowed_castles & 0b0000_1100;
+                (low << 2) | (high >> 2)
+            },
+            maskset: MaskSet::from_board(&flip),
+            king_indices: flip.get_kings()
+        };
+    }
+    pub fn hydrate(&mut self, debug_log: bool){
+        if debug_log {
+            pretty_print_board("Hydrating board", &self.board);
+            pretty_print_maskset("Maskset", &self.info.maskset);
+        }
+        self.moves = self.board.get_motions(&self.info.maskset, &self.info.enpassant_mask, Some(self.info.allowed_castles));
+        if debug_log {
+            pretty_print_masks("Flat moves", &vec![("White", &self.moves.white_flat), ("Black", &self.moves.black_flat)]);
+        }
+        let mut zrist = self.zobrist.lock().unwrap();
+        zrist.save((self.info.clone(), self.moves.clone(), None));
+        drop(zrist);
+    }
+    /*
     pub fn hydrate(&mut self){
-        self.moves = self.board.get_moves(self.turn, &self.info);
+        self.moves = self.board.get_moves(self.turn, &self.info.maskset, &self.info.enpassant_mask);
         let myking = self.info.king_indices[if self.turn == Parity::WHITE { 0 } else { 1 }];
         if myking == 65 {
             self.moves = [ARRAY_REPEAT_VALUE; 64];
@@ -155,13 +199,13 @@ impl State {
             let parity_castles = self.info.allowed_castles & if myking == 60 { 0b0000_1100 } else { 0b0000_0011 };
             if parity_castles & 0b0000_0101 != 0 && myking + 2 < 64 {
                 let mask = Mask::from_index(myking + 1) | Mask::from_index(myking + 2);
-                if (mask & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask)) {
+                if (mask & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask), !self.turn) {
                     self.moves[myking].push(Motion { from: myking, to: if myking == 4 { 7 } else { 63 } });
                 }
             }
             if parity_castles & 0b0000_1010 != 0 && myking > 2 {
                 let mask = Mask::from_index(myking - 1) | Mask::from_index(myking - 2);
-                if ((mask | Mask::from_index(myking - 3)) & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask)) {
+                if ((mask | Mask::from_index(myking - 3)) & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask), !self.turn) {
                     self.moves[myking].push(Motion { from: myking, to: if myking == 4 { 0 } else { 56 } });
                 }
             }
@@ -177,16 +221,8 @@ impl State {
             });
         }
         let mut zrist = self.zobrist.lock().unwrap();
-        zrist.save((self.info.clone(), self.moves.clone()));
+        zrist.save((self.info.clone(), self.moves.clone(), None));
         drop(zrist);
     }
-    pub fn flipped_moves(&self) -> [Vec<Motion>; 64] {
-        let mut array: [Vec<Motion>; 64] = [ARRAY_REPEAT_VALUE; 64];
-        for y in 0..8 {
-            for x in 0..8 {
-                array[(7 - y) * 8 + x] = self.moves[y * 8 + x].to_vec();
-            }
-        }
-        return array;
-    }
+    */
 }

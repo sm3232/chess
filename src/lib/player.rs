@@ -7,6 +7,8 @@ use crate::lib::{
 };
 
 pub trait Player: Send + Sync {
+    fn get_analyzed(&self) -> usize;
+    fn get_cache_saves(&self) -> usize;
     fn get_parity(&self) -> Parity;
-    fn your_turn(&self, state: Arc<Mutex<State>>) -> bool;
+    fn your_turn(&mut self, state: Arc<Mutex<State>>) -> bool;
 }

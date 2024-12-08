@@ -23,19 +23,7 @@ use crate::lib::{
 use std::sync::{mpsc, Arc};
 use eframe::egui::{self, Color32, Painter, RequestRepaintInfo};
 
-use super::manager::SharedState;
-pub struct VisualState {
-    pub board: [u8; 64],
-    pub tree: SearchTree
-}
-impl Default for VisualState {
-    fn default() -> Self {
-        return Self {
-            board: [0u8; 64],
-            tree: SearchTree::placeholder(50.0, 50.0)
-        };
-    }
-}
+use super::manager::{SharedState, VisualInfo};
 pub struct ChessApp {
     pub receiver: mpsc::Receiver<SharedState>,
     pub sender: mpsc::Sender<Input>,
@@ -44,7 +32,8 @@ pub struct ChessApp {
     pub game_over: bool,
     pub game_rect: egui::Rect,
     pub info_rect: egui::Rect,
-    pub last_visual_state: VisualState
+    pub last_visual_state: VisualInfo,
+    pub solid_board: [u8; 64]
 }
 
 impl ChessApp {
@@ -67,7 +56,8 @@ impl ChessApp {
                 min: egui::Pos2 { x: playing_area, y: 0.0 },
                 max: egui::Pos2 { x: playing_area + info_width, y: playing_area }
             },
-            last_visual_state: VisualState::default()
+            last_visual_state: VisualInfo::none(),
+            solid_board: [0u8; 64]
         };
 
     }
@@ -146,6 +136,27 @@ impl eframe::App for ChessApp {
         if input.wants_unpause {
             self.paused = false;
         }
+
+        if state.visuals.cache_saves.is_some_and(|x| x != 0) {
+            self.last_visual_state.cache_saves = state.visuals.cache_saves;
+        }
+        if state.visuals.analyzed.is_some_and(|x| x != 0) {
+            self.last_visual_state.analyzed = state.visuals.analyzed;
+        }
+        if state.visuals.visual_weights.is_some() {
+            self.last_visual_state.visual_weights = state.visuals.visual_weights;
+        }
+        if state.visuals.evaluation.is_some() {
+            self.last_visual_state.evaluation = state.visuals.evaluation.clone();
+        }
+        if state.visuals.tree.as_ref().is_some_and(|x| !x.lock().unwrap().children.is_empty()) {
+            self.last_visual_state.tree = Some(Arc::clone(state.visuals.tree.as_ref().unwrap()));
+        }
+
+        if !state.working {
+            self.solid_board = state.board;
+        }
+
         
         egui::CentralPanel::default().frame(egui::Frame::none().inner_margin(egui::Margin{ top: 0.0, left: 0.0, bottom: 0.0, right: 30.0 })).show(ctx, |ui| {
             ui.spacing_mut().item_spacing = egui::Vec2 { x: 15.0, y: 0.0 };
@@ -160,7 +171,7 @@ impl eframe::App for ChessApp {
                             if state.working {
                                 draw::draw_pieces(&state.board, uui, bg_painter.clip_rect().width().min(bg_painter.clip_rect().height()) / 8.0, true);
                             }
-                            draw::draw_all(&self.last_visual_state.board, state.selected, &state.moves, uui, &bg_painter, &dbg_painter, input.pos, false);
+                            draw::draw_all(&self.solid_board, state.selected, &state.moves, uui, &bg_painter, &dbg_painter, input.pos, false);
                         });
 
                         if state.game_over {
@@ -200,7 +211,8 @@ impl eframe::App for ChessApp {
                         }
                         ui.add_space(ui.painter().round_to_pixel(INFO_LINE_HEIGHT) * (4.0 - castles.len() as f32));
                         ui.label(egui::RichText::new("Evaluation").monospace());
-                        ui.label(egui::RichText::new(pretty_string_evaluator(&state.evaluation)));
+                    
+                        ui.label(egui::RichText::new(pretty_string_evaluator(state.visuals.evaluation.as_ref().unwrap())));
 
                         let (_, weight_rect) = ui.allocate_space(egui::Vec2 { x: WEIGHT_VIS_SIZE, y: WEIGHT_VIS_SIZE });
                         let weight_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("weight_painter")), weight_rect);
@@ -220,27 +232,19 @@ impl eframe::App for ChessApp {
                                 }
                             }
                         }
+                        ui.label(egui::RichText::new(format!("Searched {} positions", state.visuals.analyzed.unwrap_or(self.last_visual_state.analyzed.unwrap_or(0)))));
+                        ui.label(egui::RichText::new(format!("Saved {} searches with caching", state.visuals.cache_saves.unwrap_or(self.last_visual_state.cache_saves.unwrap_or(0)))));
                     });
                     let (_, tree_rect) = ui.allocate_space(egui::Vec2 { x: ui.available_width(), y: ui.available_height() * 2.0 });
                     let tree_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("tree_painter")), tree_rect);
                     if state.working {
-                        SearchTree::display(&state.tree, ui, &tree_painter);
-                    } else {
-                        SearchTree::display_nobs(&self.last_visual_state.tree, ui, &tree_painter);
+                        SearchTree::display(state.visuals.tree.as_ref().unwrap(), ui, &tree_painter);
+                    } else if self.last_visual_state.tree.is_some() {
+                        SearchTree::display(self.last_visual_state.tree.as_ref().unwrap(), ui, &tree_painter);
                     }
                 });
 
             });
-            let mut treelock = state.tree.try_lock();
-            if let Ok(ref mut mtx) = treelock {
-                if mtx.children.len() != 0 {
-                    self.last_visual_state.tree = SearchTree::absolutely_cloned(mtx);
-                }
-            }
-            drop(treelock);
-            if !state.working {
-                self.last_visual_state.board = state.board;
-            }
             if state.waiting_for_a_human_input {
                 let _ = self.sender.send(input).unwrap();
             }

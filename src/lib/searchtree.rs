@@ -1,7 +1,9 @@
 use core::f32;
-use std::{cell::RefCell, rc::Rc, sync::{Arc, Mutex, MutexGuard}};
+use std::{cell::RefCell, ops::{Deref, DerefMut}, rc::Rc, sync::{Arc, Mutex, MutexGuard}};
 
 use eframe::egui;
+use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
+use rand_distr::{Distribution, Normal};
 use voxell_rng::rng::XorShift32;
 
 
@@ -18,8 +20,8 @@ pub struct SearchTree {
 fn remap(v: f32, imin: f32, imax: f32, omin: f32, omax: f32) -> f32 {
     return omin + (v - imin) * (omax - omin) / (imax - imin);
 }
-pub const ROOT_C: f32 = 5.0;
-pub const ROOT_S: f32 = 1.0;
+pub const ROOT_C: f32 = 3.0;
+pub const ROOT_S: f32 = 0.25;
 impl SearchTree {
     pub fn placeholder(x: f32, y: f32) -> Self {
         Self {
@@ -141,8 +143,9 @@ impl SearchTree {
         FancyTreeLayout::layout(root);
         let (min_x, max_x) = SearchTree::find_ex(root);
         SearchTree::remap_xs(root, min_x, max_x, 50.0, painter.clip_rect().max.x - painter.clip_rect().min.x - 50.0);
-        let rng = XorShift32::default();
-        root.lock().unwrap().draw_tree_recursive(ui, painter, painter.clip_rect().left_top() + egui::Vec2 { x: 0.0, y: 15.0 }, Arc::new(Mutex::new(rng)), 0);
+        let cha = ChaCha8Rng::from_entropy();
+        let rand = Normal::new(0.0, 10.0).ok().unwrap();
+        root.lock().unwrap().draw_tree_recursive(ui, painter, painter.clip_rect().left_top() + egui::Vec2 { x: 0.0, y: 15.0 }, Arc::new(rand), Arc::new(Mutex::new(cha)), 1);
     }
     fn draw_tree_recursive_raw(&self, ui: &egui::Ui, painter: &egui::Painter, parent_location: egui::Pos2) {
         let loc = egui::Pos2 {
@@ -157,14 +160,15 @@ impl SearchTree {
                 y: parent_location.y + *child_ref.__y.borrow() + *child_ref.__o.borrow()
             };
 
-            if self.value != Parity::NONE {
-                painter.line_segment(
-                    [loc, child_loc], 
-                    egui::Stroke { width: ROOT_S, color: egui::Color32::WHITE }
-                );
-            }
-
-            child_ref.draw_tree_recursive_raw(ui, painter, parent_location);
+            // if !child_ref.children.is_empty() {
+                if self.value != Parity::NONE {
+                    painter.line_segment(
+                        [loc, child_loc], 
+                        egui::Stroke { width: ROOT_S, color: egui::Color32::WHITE }
+                    );
+                }
+                child_ref.draw_tree_recursive_raw(ui, painter, parent_location);
+            // }
         }
 
         if self.value != Parity::NONE {
@@ -174,8 +178,7 @@ impl SearchTree {
         }
     
     }
-    fn draw_tree_recursive(&self, ui: &egui::Ui, painter: &egui::Painter, parent_location: egui::Pos2, rand: Arc<Mutex<XorShift32>>, siblings: usize) {
-
+    fn draw_tree_recursive(&self, ui: &egui::Ui, painter: &egui::Painter, parent_location: egui::Pos2, rand: Arc<Normal<f32>>, cha: Arc<Mutex<ChaCha8Rng>>, depth: usize) {
         let loc = egui::Pos2 {
             x: parent_location.x + *self.__x.borrow(), 
             y: parent_location.y + *self.__y.borrow() + *self.__o.borrow()
@@ -183,22 +186,29 @@ impl SearchTree {
         for child in &self.children {
             let child_ref = child.lock().unwrap();
             
+            let mut lock = cha.lock().unwrap();
             if *child_ref.__o.borrow() == 0.0 {
                 if child_ref.children.is_empty() {
-                    *child_ref.__o.borrow_mut() = rand.lock().unwrap().next_f32() * siblings as f32;
+
+                    *child_ref.__o.borrow_mut() = rand.sample(lock.deref_mut()) * depth as f32;
+
                 }
             }
+            drop(lock);
             let child_loc = egui::Pos2 {
                 x: parent_location.x + *child_ref.__x.borrow(),
                 y: parent_location.y + *child_ref.__y.borrow() + *child_ref.__o.borrow()
             };
 
-            painter.line_segment(
-                [loc, child_loc], 
-                egui::Stroke { width: ROOT_S, color: egui::Color32::WHITE }
-            );
 
-            child_ref.draw_tree_recursive(ui, painter, parent_location, rand.clone(), self.children.len());
+            // if !child_ref.children.is_empty() {
+                painter.line_segment(
+                    [loc, child_loc], 
+                    egui::Stroke { width: ROOT_S, color: egui::Color32::WHITE }
+                );
+                child_ref.draw_tree_recursive(ui, painter, parent_location, rand.clone(), cha.clone(), depth + 1);
+
+            // }
         }
 
         let color = if self.value == Parity::WHITE { egui::Color32::WHITE } else { egui::Color32::BLACK };
@@ -210,10 +220,10 @@ impl SearchTree {
 pub struct FancyTreeLayout;
 pub struct StaticTreeLayout;
 
+const HSPACE: f32 = 500.0;
+const VSPACE: f32 = 100.0;
 impl StaticTreeLayout {
     pub fn layout(root: &SearchTree) -> () {
-        const HSPACE: f32 = 50.0;
-        const VSPACE: f32 = 100.0;
         Self::climb(root, 0.0, VSPACE);
         Self::walk(root, 0.0, HSPACE);
         let mut min = f32::INFINITY;
@@ -265,8 +275,6 @@ impl StaticTreeLayout {
 
 impl FancyTreeLayout {
     pub fn layout(root: &Arc<Mutex<SearchTree>>) -> () {
-        const HSPACE: f32 = 50.0;
-        const VSPACE: f32 = 100.0;
         Self::climb(root, 0.0, VSPACE);
         Self::walk(root, 0.0, HSPACE);
         let mut min = f32::INFINITY;
@@ -323,49 +331,4 @@ impl FancyTreeLayout {
         }
         drop(node_ref);
     }
-    /*
-    fn walk(&self, tree: &Arc<Mutex<SearchTree>>) -> f32 {
-        let mut tree_ref = tree.borrow_mut();
-
-        if tree_ref.children.is_empty() {
-            tree_ref.__x = 0.0;
-            return 0.0;
-        }
-
-        let mut fcs = 0.0;
-        let mut prev: Option<&Arc<Mutex<SearchTree>>> = None;
-
-        for child in &tree_ref.children {
-            let _lsm = if let Some(pre) = prev {
-                let childx = self.walk(child);
-                let prevx = self.walk(pre);
-                let modsum = childx - prevx;
-                fcs += modsum;
-                modsum
-            } else {
-                0.0
-            };
-            let mut child_ref = child.borrow_mut();
-            child_ref.__x = fcs;
-            prev = Some(child);
-        }
-        let cw = tree_ref.children.len() as f32 * self.x;
-        tree_ref.__x = cw / 2.0;
-        return fcs;
-    }
-    fn walk_again(&self, tree: &Arc<Mutex<SearchTree>>, depth: f32, modifier: f32) -> () {
-        let mut tree_ref = tree.borrow_mut();
-        tree_ref.__x += modifier;
-        tree_ref.__y = depth * self.y;
-        drop(tree_ref);
-        for child in &tree.borrow().children {
-            self.walk_again(child, depth + 1.0, modifier);
-        }
-    }
-
-    pub fn layout(&self, root: &Arc<Mutex<SearchTree>>) -> () {
-        let modi = self.walk(root);
-        self.walk_again(root, 0.0, modi);
-    }
-    */
 }

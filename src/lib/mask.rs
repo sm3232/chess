@@ -1,4 +1,146 @@
+use stanza::renderer::{console::Console, Renderer};
+
 use crate::lib::point::Point;
+
+use super::cutil::pretty_print::{depth_mask_to_table, mask_to_table, value_mask_to_table};
+
+#[derive(Clone,Copy)]
+pub struct DepthMask {
+    pub raw: u128
+}
+impl DepthMask {
+    pub fn column(index: usize, value: usize) -> Self {
+        let mut array = [0u8; 16];
+        let bit = 0b0000_0001u8 << index;
+        for i in 0..(if value > 1 { 16 } else { 8 }) {
+            array[i] |= bit;
+        }
+        return DepthMask { raw: u128::from_ne_bytes(array) };
+    }
+    pub fn sub(&self, other: &Self) -> [i8; 64] {
+        let mut array = [0i8; 64];
+        let bv = &self.raw.to_ne_bytes();
+        for i in 0..16 {
+            for bit in 0..8 {
+                if bv[i] & (1 << bit) != 0 {
+                    array[(i % 8) * 8 + bit] += 1;
+                }
+            }
+        }
+        let bv2 = &other.raw.to_ne_bytes();
+        for i in 0..16 {
+            for bit in 0..8 {
+                if bv2[i] & (1 << bit) != 0 {
+                    array[(i % 8) * 8 + bit] -= 1;
+                }
+            }
+        }
+        return array;
+    }
+}
+
+#[derive(Clone, Copy)]
+pub struct ValueMask {
+    pub values: [i8; 64]
+}
+impl ValueMask {
+    pub fn add_assign(&mut self, mask: &Mask) -> () {
+        let mut im = Mask::zz();
+        let mut i = 0;
+        loop {
+            if (*mask & im).any() { self[i] += 1 };
+            if im.raw.leading_zeros() == 0 { break };
+            im.raw <<= 1;
+            i += 1;
+        }
+    }
+    pub fn sub_assign(&mut self, mask: &Mask) -> () {
+        let mut im = Mask::zz();
+        let mut i = 0;
+        loop {
+            if (*mask & im).any() { self[i] -= 1 };
+            if im.raw.leading_zeros() == 0 { break };
+            im.raw <<= 1;
+            i += 1;
+        }
+    }
+    pub fn add(&self, mask: &Mask) -> Self {
+        let mut new = self.clone();
+        new.add_assign(mask);
+        return new;
+    }
+    pub fn sub(&self, mask: &Mask) -> Self {
+        let mut new = self.clone();
+        new.sub_assign(mask);
+        return new;
+    }
+    pub fn count_positive(&self) -> i32 {
+        let mut c = 0;
+        for i in self.values { if i > 0 { c += 1 } };
+        return c;
+    }
+    pub fn count_negative(&self) -> i32 {
+        let mut c = 0;
+        for i in self.values { if i < 0 { c += 1 } };
+        return c;
+    }
+    pub fn count_zeros(&self) -> i32 {
+        let mut c = 0;
+        for i in self.values { if i == 0 { c += 1 } };
+        return c;
+    }
+    pub fn filter_for_val(&self, val: i8) -> Self {
+        let mut result = Self { values: [0i8; 64] };
+        for i in 0..64 {
+            if self[i] == val {
+                result[i] = self[i];
+            } else {
+                result[i] = 0;
+            }
+        }
+        return result;
+    }
+    pub fn to_mask(&self, filter: i8) -> Mask {
+        let mut m = Mask::default();
+        for i in 0..64 {
+            if self[i] == filter {
+                m |= i;
+            }
+        }
+        return m;
+    }
+    pub fn to_mask_ge0(&self) -> Mask {
+        let mut m = Mask::default();
+        for i in 0..64 {
+            if self[i] >= 0 {
+                m |= i;
+            }
+        }
+        return m;
+    }
+}
+impl Default for ValueMask { fn default() -> Self { Self { values: [0i8; 64] } } }
+impl std::ops::IndexMut<usize> for ValueMask {
+    fn index_mut(&mut self, index: usize) -> &mut Self::Output { &mut self.values[index] }
+}
+impl std::ops::Index<usize> for ValueMask {
+    type Output = i8;
+    fn index(&self, index: usize) -> &Self::Output { &self.values[index] }
+}
+impl std::fmt::Display for ValueMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(f, "\n{}", Console::default().render(&value_mask_to_table("Value mask", self)));
+    }
+}
+
+
+impl std::fmt::Debug for DepthMask {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(f, "\n{}", Console::default().render(&depth_mask_to_table(self)));
+    }
+}
+
+
 #[derive(Clone,Copy)]
 pub struct Mask {
     pub raw: u64
@@ -6,13 +148,7 @@ pub struct Mask {
 
 impl std::fmt::Debug for Mask {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let bv = &mut self.raw.to_le_bytes();
-        let mut str = "\n".to_owned();
-        for byte in bv.iter() {
-            let x = byte.reverse_bits();
-            str.push_str(&format!("{x:08b}\n"));
-        }
-        return write!(f, "{str}");
+        return write!(f, "\n{}", Console::default().render(&mask_to_table(self)));
     }
 }
 
@@ -22,6 +158,26 @@ impl Default for Mask {
 
 #[allow(dead_code)]
 impl Mask {
+    #[inline]
+    pub fn zz() -> Mask { Mask { raw: 0b0000000000000000000000000000000000000000000000000000000000000001u64 } }
+    pub fn get_diags_above(&self) -> (Mask, Mask) {
+        return (Mask { raw: self.raw.unbounded_shl(9) }, Mask { raw: self.raw.unbounded_shl(7) });
+    }
+    pub fn get_diags_below(&self) -> (Mask, Mask) {
+        return (Mask { raw: self.raw.unbounded_shr(7) }, Mask { raw: self.raw.unbounded_shr(9) });
+    }
+    pub fn get_knightish(&self) -> Mask {
+        return Mask { 
+            raw: self.raw.unbounded_shl(10) | 
+                self.raw.unbounded_shl(17) | 
+                self.raw.unbounded_shl(15) | 
+                self.raw.unbounded_shl(6) | 
+                self.raw.unbounded_shr(10) | 
+                self.raw.unbounded_shr(17) | 
+                self.raw.unbounded_shr(15) | 
+                self.raw.unbounded_shr(6) 
+        };
+    }
     pub fn to_point_vector(&self) -> Vec<Point> {
         let bv = &mut self.raw.to_ne_bytes();
         let mut v: Vec<Point> = Vec::new();
@@ -143,7 +299,7 @@ impl Mask {
         return mask;
     }
 
-    pub fn of_column(col: i32) -> Mask {
+    pub fn of_column(col: usize) -> Mask {
         let bit = 1u64 << col;
         let mut mask = Mask { raw: bit };
         for _ in 0..7 {
@@ -151,6 +307,34 @@ impl Mask {
             mask |= bit;
         }
         return mask;
+    }
+    pub fn all_rows_above(row: usize) -> Mask {
+        let mut array = [0u8; 8];
+        for i in 0..row {
+            array[i] = 0b1111_1111;
+        }
+        return Mask { raw: u64::from_ne_bytes(array) };
+    }
+    pub fn all_rows_below(row: usize) -> Mask {
+        let mut array = [0b1111_1111u8; 8];
+        for i in 0..=row {
+            array[i] = 0b0000_0000;
+        }
+        return Mask { raw: u64::from_ne_bytes(array) };
+    }
+    pub fn all_cols_left(col: usize) -> Mask {
+        let mut bit = 0b0000_0000;
+        for i in 0..col {
+            bit |= 0b0000_0001 << i;
+        }
+        return Mask { raw: u64::from_ne_bytes([bit; 8]) };
+    }
+    pub fn all_cols_right(col: usize) -> Mask {
+        let mut bit = 0b0000_0000;
+        for i in 0..=col {
+            bit |= 0b0000_0001 << i;
+        }
+        return Mask { raw:u64::from_ne_bytes([bit; 8]) }.get_not();
     }
     
     pub fn as_index(&self) -> usize {
@@ -163,6 +347,11 @@ impl Mask {
             }
         }
         return 0usize;
+    }
+    pub fn flipped(&self) -> Mask {
+        let mut r = self.raw.to_ne_bytes();
+        r.reverse();
+        return Mask { raw: u64::from_ne_bytes(r) };
     }
 
     pub fn from_castle_bytes(bytes: u8) -> Self {
