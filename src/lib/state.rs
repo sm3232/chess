@@ -123,6 +123,9 @@ impl State {
         }
         panic!("No held state when expected!");
     }
+    pub fn get_king(&self, parity: Parity) -> usize {
+        return self.info.king_indices[if parity == Parity::WHITE { 0 } else { 1 }];
+    }
     pub fn init(&mut self) {
         let zrist = self.zobrist.lock().unwrap();
         self.info.zkey = zrist.kof_board(self);

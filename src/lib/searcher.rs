@@ -1,111 +1,100 @@
-use std::{collections::HashMap, sync::{mpsc::{self, Sender}, Arc, Mutex}};
+use std::{collections::{HashMap, HashSet}, sync::{mpsc::{self, Sender}, Arc, Mutex, MutexGuard, Weak}, time};
 use crate::lib::{
     chessbyte::ChessByte, cutil::pretty_print::pretty_print_board, eval, motion::Motion, piece::Parity, searchtree::SearchTree
 };
 use super::{heap::{EvaluatedMotion, Heap}, mask::Mask, state::State};
 
+#[derive(Debug)]
 pub struct SearchCheckIn {
     pub tree: SearchTree,
     pub cache_saves: usize,
     pub positions_looked_at: usize
 }
+impl Default for SearchCheckIn {
+    fn default() -> Self {
+        Self {
+            tree: SearchTree::default(),
+            cache_saves: 0,
+            positions_looked_at: 0
+        }
+    }
+}
 
 pub struct SearchDriver {
     pub parity: Parity,
-    pub depth: usize,
-    pub nodes: usize,
-    pub q_nodes: usize,
+    pub depth: u8,
+    pub nodes: u64,
+    pub q_nodes: u64,
     pub cache_saves: usize,
     pub positions_looked_at: usize,
-    pub comm: Option<Sender<SearchCheckIn>>
+    pub comm: Option<crossbeam_channel::Sender<SearchCheckIn>>,
+    pub tree: SearchTree,
+    pub time_remaining: time::Duration,
+    pub time_start: time::Instant
 }
 
 impl SearchDriver {
-    pub fn clear(&mut self, side_to_move: Parity) {
+    pub fn clear(&mut self, side_to_move: Parity, time_limit: &time::Duration) {
         self.parity = side_to_move;
         self.depth = 0;
         self.nodes = 0;
         self.q_nodes = 0;
         self.cache_saves = 0;
         self.positions_looked_at = 0;
+        self.tree = SearchTree::new(side_to_move);
+        self.time_remaining = time_limit.clone();
+        self.time_start = time::Instant::now();
     }
-    pub fn communicate_on(&mut self, comms: mpsc::Sender<SearchCheckIn>) -> () {
+    pub fn communicate_on(&mut self, comms: crossbeam_channel::Sender<SearchCheckIn>) -> () {
         self.comm = Some(comms);
     }
+    pub fn communicate(&self) -> () {
+        if let Some(channel) = &self.comm {
+            let ci = SearchCheckIn {
+                positions_looked_at: self.positions_looked_at.clone(),
+                cache_saves: self.cache_saves.clone(),
+                tree: self.tree.clone()
+            };
+            let _ = channel.send(ci).unwrap();
+        }
+    }
 }
-impl Default for SearchDriver { fn default() -> Self { Self { cache_saves: 0, positions_looked_at: 0, depth: 0, nodes: 0, q_nodes: 0, parity: Parity::WHITE, comm: None } } }
+impl Default for SearchDriver { fn default() -> Self { Self { cache_saves: 0, positions_looked_at: 0, depth: 0, nodes: 0, q_nodes: 0, parity: Parity::WHITE, comm: None, tree: SearchTree::default(), time_remaining: time::Duration::default(), time_start: time::Instant::now() } } }
 
 pub struct Searcher {
     pub tree: Vec<Arc<Mutex<SearchTree>>>,
-    pub ply: usize,
-    pub tt: HashMap<u64, (EvaluatedMotion, usize)>,
+    pub tt: HashMap<u64, EvaluatedMotion>,
     pub driver: SearchDriver,
-    pub mtm: Motion
+    pub mtm: Motion,
+    pub echo: HashSet<u64>,
+    pub time_limit: time::Duration
 }
 impl Searcher {
-    /*
-    pub fn quiesce(&mut self, state: Arc<Mutex<State>>, mut alpha: i32, beta: i32, depth: usize) -> i32 {
-        let lock = state.lock().unwrap();
-        let evl = eval::start_eval(&lock).eval;
-        drop(lock);
-        if evl >= beta {
-            return beta; 
-        }
-        if alpha < evl { alpha = evl };
-        for i in 0..64 {
-            let mut ilsl = state.lock().unwrap();
-            if ilsl.board[i].is_parity(ilsl.turn) {
-                let moves = if ilsl.turn == Parity::WHITE { ilsl.moves.white_moves[i].clone() } else { ilsl.moves.black_moves[i].clone() };
-                for m in moves.iter() {
-                    if ilsl.board[m.to].is_piece() && ilsl.board[m.to].is_parity(!ilsl.board[m.from].get_parity()) {
-                        ilsl.num_analyzed += 1;
-                        ilsl.make_motion(m, false);
-                        drop(ilsl);
-
-                        let score = -self.quiesce(state.clone(), -beta, -alpha, depth + 1);
-                        ilsl = state.lock().unwrap();
-                        ilsl.unmake_last(true);
-                        if score >= beta {
-                            drop(ilsl);
-                            return beta;
-                        }
-                        if score > alpha {
-                            alpha = score;
-                            /*
-                            if ilsl.turn == self.primary {
-                                self.heap.push(EvaluatedMotion { evaluation: score, motion: *m } );
-                            }
-                            */
-                        }
-                        
-                    }
-                }
-            }
-            drop(ilsl);
-        }
-        return alpha;
-    }
-*/
-    const ABSOLUTELY_MAX_DEPTH: usize = 10;
+    const ABSOLUTELY_MAX_DEPTH: u8 = 100;
     const ASPIRATION_ADJUSTMENT: i32 = 50;
+    const MATERIAL_EVAL_CUTOFF: i32 = 1300;
+    const CONTEMPT_VAL: i32 = -10;
     pub fn run(&mut self, state: Arc<Mutex<State>>) -> Motion {
-        println!("Searcher starting");
-        println!("Searcher getting lock");
         let lock = state.lock().unwrap();
-        println!("Searcher got lock");
         let parity = lock.turn;
         drop(lock);
-        println!("Searcher dropped lock");
-        self.driver.clear(parity);
-        println!("Searcher cleared driver");
+        self.driver.clear(parity, &self.time_limit);
         // calc_movetime();
         // age_history_table();
-        println!("Searcher calling iterate");
-        return self.iterate(state.clone());
-        println!("Searcher returned from iterate");
+        self.driver.communicate();
+
+        let result = self.iterate(state.clone());
+        self.driver.communicate();
+        return result;
     }
-    fn analyze(&mut self, state: Arc<Mutex<State>>, mut depth: usize, ply: usize, mut alpha: i32, mut beta: i32, null: bool, pv: bool) -> i32 {
-        println!("Analyzer start analyze");
+    fn analyze(&mut self, state: Arc<Mutex<State>>, mut depth: u8, ply: usize, mut alpha: i32, mut beta: i32, null: bool, pv: bool) -> i32 {
+
+        self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+        if self.driver.time_remaining.is_zero() {
+            return 0;
+        }
+        self.driver.positions_looked_at += 1;
+        self.driver.communicate();
         let mut val = i32::MIN + 1;
         let mate = i32::MAX - ply as i32;
         if alpha < -mate {
@@ -115,264 +104,375 @@ impl Searcher {
             beta = mate - 1;
         }
         if alpha >= beta {
-            println!("Analyzer returning alpha bc alpha >= beta. {alpha} >= {beta}");
             return alpha;
         }
-        println!("Analyzer getting lock");
         let mut lock = state.lock().unwrap();
-        println!("Analyzer got lock");
-        let in_check = (lock.moves.parity_flat(!self.driver.parity) & Mask::from_index(lock.info.king_indices[0])).any();
+        let in_check = (lock.moves.parity_flat(!lock.turn) & Mask::from_index(lock.get_king(lock.turn))).any();
         if in_check { depth += 1 };
         if depth == 0 {
             drop(lock);
-            println!("Analyzer dropped lock");
-            println!("Analyzer calling quiet");
             return self.quiescence(state.clone(), alpha, beta);
-            println!("Analyzer returned from quiet");
         }
         self.driver.nodes += 1;
-        if !pv || (val > alpha && val < beta) {
-            if let Some(saved) = self.tt.get(&lock.info.zkey) {
+
+        if self.echo.contains(&lock.info.zkey) {
+            self.driver.cache_saves += 1;
+            if eval::material::price_parity(&lock.board, self.driver.parity) < Self::MATERIAL_EVAL_CUTOFF {
                 drop(lock);
-                println!("Analyzer dropping lock inside !pv || (val > alpha && val < beta)");
-                println!("Analyzer returning {}", saved.0.evaluation);
-                return saved.0.evaluation;
+                return 0;
+            } else {
+                if lock.turn == self.driver.parity {
+                    drop(lock);
+                    return Self::CONTEMPT_VAL;
+                } else {
+                    drop(lock);
+                    return -Self::CONTEMPT_VAL;
+                }
             }
         }
-        if depth < 3 && !pv && !in_check && beta.abs_diff(beta - 1) as i32 > i32::MIN + 100 {
-            let statice = eval::start_eval(&lock);
-            if statice.eval - (120 * depth) as i32 >= beta {
-                println!("Analyzer dropping lock insize depth < 3 && !pv && !in_check...");
+
+        if !pv || (val > alpha && val < beta) {
+            if let Some(saved) = self.tt.get(&lock.info.zkey) {
+                self.driver.cache_saves += 1;
                 drop(lock);
-                println!("Analyzer returning {}", statice.eval - 120 * depth as i32);
+                return saved.evaluation;
+            }
+        }
+        if depth < 3 && !pv && !in_check && (beta - 1).abs() > i32::MIN + 100 {
+            let statice = eval::start_eval(&lock);
+            println!("{} - (120 * {}) >= {beta}", statice.eval, depth);
+            if statice.eval as i32 - (120 * depth) as i32 >= beta {
+                drop(lock);
                 return statice.eval - 120 * depth as i32;
             }
         }
-        let moves = lock.moves.parity_vect(self.driver.parity);
+        if depth > 2 && null && !pv && !in_check && eval::start_eval(&lock).eval >= beta && eval::material::price_parity(&lock.board, lock.turn) > Self::MATERIAL_EVAL_CUTOFF {
+            // Null move
+            lock.make_motion(&Motion { from: 65, to: 65 }, false);
+            drop(lock);
+            val = -self.analyze(state.clone(), depth - if depth > 6 { 4 } else { 3 }, ply, -beta, -beta + 1, false, false);
+            lock = state.lock().unwrap();
+            lock.unmake_last(true);
+            if val >= beta {
+                drop(lock);
+                return beta;
+            }
+        }
+
+        let futile_margin: [i32; 4] = [0, 200, 300, 500];
+        let futility_prune = depth < 4 && !pv && !in_check && alpha.abs() < 9000 && eval::start_eval(&lock).eval + futile_margin[depth as usize] <= alpha;
+
+        let moves = lock.moves.parity_vect(lock.turn);
         let mut heap = Heap::default();
         let mut raised = false;
         let mut ndepth = depth - 1;
-        let mut reduce = 0;
         let mut best = EvaluatedMotion::default();
-        println!("Analyzer sorting moves");
+        let mut moves_tried = 0;
         for m in &moves {
             lock.make_motion(m, false);
-            heap.push(EvaluatedMotion { evaluation: eval::start_eval(&lock).eval, motion: *m, key: lock.info.zkey });
+            if (lock.moves.parity_flat(lock.turn) & Mask::from_index(lock.get_king(!lock.turn))).none() {
+                heap.push(EvaluatedMotion { evaluation: eval::start_eval(&lock).eval, motion: *m, key: lock.info.zkey });
+            }
             lock.unmake_last(true);
         }
+        if lock.turn == Parity::WHITE {
+            for (index, h) in heap.store.iter().enumerate() {
+                lock.moves.white_vect[index] = h.motion;
+            }
+        } else {
+            for (index, h) in heap.store.iter().enumerate() {
+                lock.moves.black_vect[index] = h.motion;
+            }
+        }
         drop(lock);
-        println!("Analyzer dropped lock");
-
-        println!("Analyzer starting outer loop");
-        loop {
+        'outer: loop {
+            if heap.empty() { break 'outer };
             let motion = heap.pop();
+            let mut lock = state.lock().unwrap();
+            let promotion = self.is_promotion(&lock, &motion.motion);
+            let capture = self.is_capture(&lock, &motion.motion);
+            lock.make_motion(&motion.motion, false);
+            moves_tried += 1;
+            SearchTree::leaf(&mut self.driver.tree, lock.turn);
+            drop(lock);
 
-            println!("Analyzer starting inner loop (research)");
+
+            if futility_prune && !capture && !promotion {
+                let mut lock = state.lock().unwrap();
+                lock.unmake_last(true);
+                SearchTree::back(&mut self.driver.tree, false);
+                drop(lock);
+                continue 'outer;
+            }
+            
+            let mut reduce = 0;
+
+            if !pv && ndepth > 3 && moves_tried > 3 && !capture && !promotion {
+                reduce = 1;
+                if moves_tried > 8 {
+                    reduce += 1;
+                }
+                ndepth -= reduce;
+            }
+
             'research: loop {
                 if !raised {
-
-                    println!("Analyzer not raised, calling analyze");
-                    {
-                        println!("TESTBLOCK");
-                        let l = state.lock().unwrap();
-                        pretty_print_board("TEST BOARD PRINT", &l.board);
-                        drop(l);
-                    }
                     val = -self.analyze(state.clone(), ndepth, ply + 1, -beta, -alpha, true, pv);
-                    println!("Analyzer returned from analyze in not raised");
                 } else {
-                    println!("Analyzer is raised, calling analyze if");
                     if -self.analyze(state.clone(), ndepth, ply + 1, -beta, -alpha, true, false) > alpha {
-                        println!("Analyzer returned from analyze if in is raised");
-                        println!("Analyzer calling analyze again in is raised");
                         val = -self.analyze(state.clone(), ndepth, ply + 1, -beta, -alpha, true, true);
-                        println!("Analyzer returned from analyze again in is raised");
-                    } else {
-                        println!("Analyzer returned from analyze in is raised, not calling again");
                     }
                 }
                 if reduce > 0 && val > alpha {
-                    println!("Analyzer reduce > 0 && val > alpha ({reduce} > 0 && {val} > {alpha})");
                     ndepth += reduce;
                     reduce = 0;
-                    println!("Analyzer research-ing");
                     continue 'research;
                 }
+
                 if val > alpha {
-                    println!("Analyzer val > alpha ({val} > {alpha})");
                     best = motion;
                     if val >= beta {
+                        /*
+                        if !capture && !promotion {
+                            self.driver.killer(motion, ply);
+                        }
+                        */
+                        alpha = beta;
+                        let mut lock = state.lock().unwrap();
+                        lock.unmake_last(true);
+                        SearchTree::back(&mut self.driver.tree, false);
+                        drop(lock);
+                        self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+                        if self.driver.time_remaining.is_zero() {
+                            return 0;
+                        }
+                        break 'outer;
                         
                     }
                     raised = true;
                     alpha = val;
                 }
-                println!("Analyzer breaking re-search");
                 break 'research;
             }
-            println!("Analyzer out of inner loop");
-            if heap.empty() { break };
+            let mut lock = state.lock().unwrap();
+            lock.unmake_last(true);
+            SearchTree::back(&mut self.driver.tree, false);
+            drop(lock);
+            self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+            if self.driver.time_remaining.is_zero() {
+                return 0;
+            }
         }
-        println!("Analyzer out of outer loop");
-        self.tt.insert(best.key, (best, depth));
+        self.tt.insert(best.key, best);
 
-        println!("Analyzer returning alpha {alpha}");
         return alpha;
+    }
+    fn is_promotion(&self, state: &MutexGuard<'_, State>, m: &Motion) -> bool {
+        return state.board[m.from].is_pawn() && (m.to < 8 || m.to > 55);
+    }
+    fn is_capture(&self, state: &MutexGuard<'_, State>, m: &Motion) -> bool {
+        return state.board[m.to].is_piece() && state.board[m.to].is_parity(!state.board[m.from].get_parity());
+    }
+    fn is_capture_bad(&self, state: &MutexGuard<'_, State>, m: &Motion) -> bool {
+        if state.board[m.from].is_pawn() { return false };
+        if eval::material::price_piece(state.board[m.to]) >= eval::material::price_piece(state.board[m.from]) - 50 {
+            return false;
+        }
+        let mask = Mask::from_index(m.to);
+        if state.board[m.from].is_white() {
+            let dgs = mask.get_diags_above();
+            if state.board[dgs.0].is_b_pawn() || state.board[dgs.1].is_b_pawn() {
+                return true;
+            }
+        } else {
+            let dgs = mask.get_diags_below();
+            if state.board[dgs.0].is_w_pawn() || state.board[dgs.1].is_w_pawn() {
+                return true;
+            }
+        }
+        return false;
     }
     // fn is_repetition(&self, state)
     fn quiescence(&mut self, state: Arc<Mutex<State>>, mut alpha: i32, beta: i32) -> i32 {
-        println!("Quiet starting quiet");
+        self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+        if self.driver.time_remaining.is_zero() {
+            return 0;
+        }
+        self.driver.positions_looked_at += 1;
+        self.driver.communicate();
+        if self.driver.nodes % 1024 == 0 {
+
+            return 0;
+        }
         self.driver.nodes += 1;
         self.driver.q_nodes += 1;
-        println!("Quiet getting lcok");
+
         let mut lock = state.lock().unwrap();
-        println!("Quiet got lock");
         let mut val = eval::start_eval(&lock).eval;
+        let standing = val;
 
         if val >= beta {
-            println!("Quiet dropping lock bc val >= beta {val} >= {beta}");
             drop(lock);
-            println!("Quiet returning beta {beta}");
             return beta;
         }
         if alpha < val {
             alpha = val;
         }
-        let moves = lock.moves.parity_vect(self.driver.parity);
-        println!("Quiet dropping lock");
+        let moves = lock.moves.parity_vect(lock.turn);
         drop(lock);
-        let mut i = 0;
-        println!("Quiet looping moved");
         for m in &moves {
-            println!("Quiet getting lock in move loop");
             lock = state.lock().unwrap();
             if !lock.board[m.to].is_piece() || lock.board[m.to].is_parity(lock.board[m.from].get_parity()) {
-                println!("Quiet move is not capture, dropping lock and continue");
+                drop(lock);
+                continue;
+            }
+            if lock.board[m.to].is_king() {
+                drop(lock);
+                return i32::MAX - 1;
+            }
+            let is_promo = self.is_promotion(&lock, &m);
+            println!("{standing} - {} + 200", eval::material::price_piece(lock.board[m.to]));
+            if standing - eval::material::price_piece(lock.board[m.to]) + 200 < alpha &&
+                eval::material::price_parity(&lock.board, !lock.turn) - eval::material::price_piece(lock.board[m.to]) > Self::MATERIAL_EVAL_CUTOFF && 
+                    !is_promo {
+                        drop(lock);
+                        continue;
+            }
+
+
+
+            if self.is_capture_bad(&lock, &m) && !is_promo {
                 drop(lock);
                 continue;
             }
             lock.make_motion(m, false);
-            println!("Quiet dropping lock after making motion");
+            SearchTree::leaf(&mut self.driver.tree, lock.turn);
             drop(lock);
 
-            println!("Quiet calling self");
             val = -self.quiescence(state.clone(), -beta, -alpha);
-            println!("Quiet returned from self");
 
-            println!("Quiet getting lock to unmake");
             lock = state.lock().unwrap();
             lock.unmake_last(true);
-            println!("Quiet dropping lock after unmake");
+            SearchTree::back(&mut self.driver.tree, false);
             drop(lock);
+            self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+            if self.driver.time_remaining.is_zero() {
+                return 0;
+            }
 
             if val > alpha {
                 if val >= beta {
-                    println!("Quiet returning bc val >= beta {val} >= {beta}");
                     return beta;
                 }
                 alpha = val;
             }
-            i += 1;
         }
-        println!("Quiet returning alpha {alpha}");
         return alpha;
     }
-    fn sroot(&mut self, state: Arc<Mutex<State>>, mut depth: usize, mut alpha: i32, beta: i32) -> i32 {
-        println!("Root starting root");
+    fn sroot(&mut self, state: Arc<Mutex<State>>, mut depth: u8, mut alpha: i32, beta: i32) -> i32 {
+        self.driver.communicate();
         let mut val = 0;
         let mut best = EvaluatedMotion::default();
-        println!("Root getting lock");
         let mut lock = state.lock().unwrap();
-        println!("Root got lock");
-        let in_check = (lock.moves.parity_flat(!self.driver.parity) & Mask::from_index(lock.info.king_indices[0])).any();
+        let in_check = (lock.moves.parity_flat(!lock.turn) & Mask::from_index(lock.get_king(lock.turn))).any();
         if in_check { depth += 1 };
-        let moves = lock.moves.parity_vect(self.driver.parity);
+        let moves = lock.moves.parity_vect(lock.turn);
         let mut heap = Heap::default();
-        println!("Root sorting moves");
         for m in &moves {
             lock.make_motion(m, false);
-            heap.push(EvaluatedMotion { evaluation: eval::start_eval(&lock).eval, motion: *m, key: lock.info.zkey });
+            if (lock.moves.parity_flat(lock.turn) & Mask::from_index(lock.get_king(!lock.turn))).none() {
+                heap.push(EvaluatedMotion { evaluation: eval::start_eval(&lock).eval, motion: *m, key: lock.info.zkey });
+            }
             lock.unmake_last(true);
         }
+        if lock.turn == Parity::WHITE {
+            for (index, h) in heap.store.iter().enumerate() {
+                lock.moves.white_vect[index] = h.motion;
+            }
+        } else {
+            for (index, h) in heap.store.iter().enumerate() {
+                lock.moves.black_vect[index] = h.motion;
+            }
+        }
         drop(lock);
-        println!("Root dropped lock");
         let mut i = 0;
-        println!("Root begin outer loop");
         loop {
             let motion = heap.pop();
-            println!("Root calling analyze if {i}==0 or analyze call");
-            if i == 0 || -self.analyze(state.clone(), depth - 1, 0, -alpha - 1, -alpha, true, false) > alpha {
-                println!("Root calling analyze inside the first move check ({i})");
-                val = -self.analyze(state.clone(), depth - 1, 0, -beta, -alpha, true, true);
-                println!("Root returned from analyze inside the first move check ({i})");
+            lock = state.lock().unwrap();
+            lock.make_motion(&motion.motion, false);
+            SearchTree::leaf(&mut self.driver.tree, lock.turn);
+            drop(lock);
+            if i == 0 || self.analyze(state.clone(), depth - 1, 0, -alpha - 1, -alpha, true, false).checked_neg().unwrap_or(i32::MIN + 1) > alpha {
+                val = self.analyze(state.clone(), depth - 1, 0, -beta, -alpha, true, true).checked_neg().unwrap_or(i32::MIN + 1);
             }
-            println!("Root passed first move check ({i})");
+            lock = state.lock().unwrap();
+            lock.unmake_last(true);
+            drop(lock);
+            self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+            if self.driver.time_remaining.is_zero() {
+                break;
+            }
+            
             if val > alpha {
-                println!("Root val > alpha, {val} > {alpha}");
+                
                 best = motion;
                 self.mtm = motion.motion;
+                SearchTree::highlight_last(&mut self.driver.tree);
+                SearchTree::back(&mut self.driver.tree, false);
                 if val >= beta {
-                    println!("Root val >= beta, {val} >= {beta}");
-                    self.tt.insert(motion.key, (motion, depth));
                     
-                    println!("Root returning beta {beta}");
+                    self.tt.insert(motion.key, motion);
+                    
+                    
                     return beta;
                 }
                 alpha = val;
-                self.tt.insert(motion.key, (motion, depth));
+                self.tt.insert(motion.key, motion);
 
+            } else {
+                SearchTree::back(&mut self.driver.tree, false);
             }
             
 
 
 
-            println!("Root end of outer loop, continuing if heap has items");
+            
             if heap.empty() { break };
             i += 1;
         }
-        self.tt.insert(best.key, (best, depth));
-        println!("Root returning alpha {alpha}");
+        self.tt.insert(best.key, best);
+        
         return alpha;
     }
 
     fn iterate(&mut self, state: Arc<Mutex<State>>) -> Motion {
-        println!("Iterator starting iterate");
-        println!("Iterator getting lock");
+        
+        
         let lock = state.lock().unwrap();
-        println!("Iterator got lock");
-        let moves = lock.moves.parity_vect(self.driver.parity);
+        
+        let moves = lock.moves.parity_vect(lock.turn);
         let move_count = moves.len();
         drop(lock);
-        println!("Iterator dropped lock");
+        
         self.driver.depth = 1;
-        println!("Iterator calling root");
         let mut val = self.sroot(state.clone(), self.driver.depth, i32::MIN + 1, i32::MAX - 1);
-        println!("Iterator returned from root");
-        println!("Iterator begin iterations");
         for i in 2..=Self::ABSOLUTELY_MAX_DEPTH {
-            println!("Iterator iteration num {i}/{}", Self::ABSOLUTELY_MAX_DEPTH);
+            self.driver.time_remaining = self.time_limit.checked_sub(time::Instant::now().duration_since(self.driver.time_start)).unwrap_or(time::Duration::ZERO);
+            if self.driver.time_remaining.is_zero() { break };
             if move_count == 1 && self.driver.depth > 4 { break };
             self.driver.depth = i;
-            println!("Iterator calling widen");
             val = self.widen(state.clone(), val);
-            println!("Iterator returned from widen");
         }
-        println!("Iterator out of iterations, returning self.mtm ({} -> {})", self.mtm.from, self.mtm.to);
         return self.mtm;
     }
     fn widen(&mut self, state: Arc<Mutex<State>>, val: i32) -> i32 {
-        println!("Widen start widen");
-        let alpha = val - Self::ASPIRATION_ADJUSTMENT;
-        let beta = val + Self::ASPIRATION_ADJUSTMENT;
-        println!("Widen calling root");
+        self.driver.communicate();
+        let alpha = val.checked_sub(Self::ASPIRATION_ADJUSTMENT).unwrap_or(i32::MIN + 1);
+        let beta = val.checked_add(Self::ASPIRATION_ADJUSTMENT).unwrap_or(i32::MAX - 1);
         let mut temp = self.sroot(state.clone(), self.driver.depth, alpha, beta);
-        println!("Widen returned from root");
         if temp <= alpha || temp >= beta {
-            println!("Widen calling root bc temp <= alpha || temp >= beta. {temp} <= {alpha} || {temp} >= {beta}");
             temp = self.sroot(state.clone(), self.driver.depth, i32::MIN + 1, i32::MAX - 1);
-            println!("Widen returned from root");
         }
-        println!("Widen returning temp {temp}");
         return temp;
     }
 

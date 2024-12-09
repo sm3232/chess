@@ -1,7 +1,8 @@
 
 use eframe::egui;
-use std::{cell::RefCell, collections::{HashMap, HashSet}, ops::Deref, rc::Rc, sync::{mpsc, Arc, Mutex}, thread::{JoinHandle, Thread}, time::Duration};
+use std::{cell::RefCell, collections::{HashMap, HashSet}, ops::Deref, rc::Rc, sync::{mpsc, Arc, Mutex}, thread::{JoinHandle, Thread}, time::{self, Duration}};
 use std::thread;
+use crossbeam_channel::unbounded;
 
 use crate::lib::{
     eval::{self, Evaluator}, 
@@ -51,7 +52,7 @@ pub struct SharedState {
     pub selected: Option<usize>,
     pub working: Option<bool>,
     pub game_over: Option<bool>,
-    pub visuals: Option<VisualInfo>
+    pub visuals: VisualInfo
 }
 
 pub struct Manager {
@@ -59,9 +60,9 @@ pub struct Manager {
     pub game_rect: egui::Rect,
     pub info_rect: egui::Rect,
     pub current_eval: Evaluator,
-    pub sender: mpsc::Sender<SharedState>,
-    pub receiver: mpsc::Receiver<Input>,
-    working_channel_recv: Option<mpsc::Receiver<SearchCheckIn>>,
+    pub sender: crossbeam_channel::Sender<SharedState>,
+    pub receiver: crossbeam_channel::Receiver<Input>,
+    working_channel_recv: Option<crossbeam_channel::Receiver<SearchCheckIn>>,
     frame: egui::Context,
     worker: Option<JoinHandle<bool>>,
 }
@@ -74,10 +75,11 @@ impl ManagerPlayer {
             parity,
             searcher: Searcher {
                 tree: Vec::new(),
-                ply: 2,
+                time_limit: time::Duration::from_secs_f32(0.5),
                 tt: HashMap::new(),
                 driver: SearchDriver::default(),
-                mtm: Motion::default()
+                mtm: Motion::default(),
+                echo: HashSet::default()
             }
         };
     }
@@ -92,28 +94,17 @@ impl Player for ManagerPlayer {
     fn get_parity(&self) -> Parity {
         return self.parity;
     }
-    fn your_turn(&mut self, state: Arc<Mutex<State>>, comms: mpsc::Sender<SearchCheckIn>) -> bool {
+    fn your_turn(&mut self, state: Arc<Mutex<State>>, comms: crossbeam_channel::Sender<SearchCheckIn>) -> bool {
+        let lock = state.lock().unwrap();
+        self.searcher.echo.insert(lock.info.zkey);
+        drop(lock);
         self.searcher.driver.communicate_on(comms);
         self.searcher.tree.clear();
-        println!("Manager getting lock");
-        let mut lock = state.lock().unwrap();
-        println!("Manager got lock");
-        lock.num_analyzed = 0;
-        lock.num_cached = 0;
-        drop(lock);
-        println!("Manager dropped lock");
-        println!("Manager starting search");
         let m = self.searcher.run(state.clone());
-        println!("Manager ended search");
-
-        println!("Manager getting lock AFTER SEARCH");
         let mut locked = state.lock().unwrap();
-        println!("Manager got lock AFTER SEARCH");
-        println!("Manager making motion");
         locked.make_motion(&m, true);
-        println!("Manager made motion");
+        self.searcher.echo.insert(locked.info.zkey);
         drop(locked);
-        println!("Manager dropped lock");
         return true;
         /*
         if self.searcher.heap.empty() {
@@ -131,7 +122,7 @@ impl Player for ManagerPlayer {
 }
 
 impl Manager {
-    pub fn init(frame: egui::Context, sender: mpsc::Sender<SharedState>, receiver: mpsc::Receiver<Input>, init_fen: String, playing_area: f32, info_width: f32) {
+    pub fn init(frame: egui::Context, sender: crossbeam_channel::Sender<SharedState>, receiver: crossbeam_channel::Receiver<Input>, init_fen: String, playing_area: f32, info_width: f32) {
         let mut mgr = Manager {
             frame,
             game: ChessGame::init(init_fen.to_string()),
@@ -172,7 +163,6 @@ impl Manager {
             }
             drop(tmplock);
             if self.game.game_over {
-                thread::sleep(Duration::from_millis(16));
                 let locked = self.game.state.lock().unwrap();
                 let _ = self.sender.send(SharedState {
                     board: Some(locked.board),
@@ -183,43 +173,40 @@ impl Manager {
                     working: Some(false),
                     game_over: Some(true),
                     moves: Some(locked.moves.parity_moves(locked.turn)),
-                    visuals: Some(VisualInfo::weight_eval(
+                    visuals: VisualInfo::weight_eval(
                         &self.game.visual_weights, 
                         self.current_eval.clone()
-                    ))
+                    )
                 });
                 drop(locked);
+                thread::sleep(Duration::from_millis(16));
                 self.frame.request_repaint();
                 continue;
             }
             if self.worker.as_ref().is_some_and(|x| !x.is_finished()) {
-                thread::sleep(Duration::from_millis(16));
                 if let Some(comms) = &self.working_channel_recv {
-                    match comms.try_recv() {
-                        Ok(val) => {
-                            let _ = self.sender.send(SharedState {
-                                board: None,
-                                turn: None,
-                                waiting_for_a_human_input: None,
-                                moves: None,
-                                allowed_castles: None,
-                                working: Some(true),
-                                game_over: None,
-                                selected: None,
-                                visuals: Some(VisualInfo::all(
-                                    &self.game.visual_weights.unwrap(),
-                                    self.current_eval.clone(),
-                                    val.tree,
-                                    val.cache_saves,
-                                    val.positions_looked_at
-                                ))
-                            });
-                            self.frame.request_repaint();
-                        },
-                        Err(mpsc::TryRecvError::Empty) => println!("No data from comms"),
-                        Err(mpsc::TryRecvError::Disconnected) => println!("Comms disconnected!")
+                    let recvv = comms.try_iter().last();
+                    if let Some(last) = recvv {
+                        let _ = self.sender.send(SharedState {
+                            board: None,
+                            turn: None,
+                            waiting_for_a_human_input: Some(false),
+                            moves: None,
+                            allowed_castles: None,
+                            working: Some(true),
+                            game_over: None,
+                            selected: None,
+                            visuals: VisualInfo::all(
+                                &self.game.visual_weights.unwrap(),
+                                self.current_eval.clone(),
+                                last.tree.clone(),
+                                last.cache_saves,
+                                last.positions_looked_at
+                            )
+                        });
                     }
                 }
+                self.frame.request_repaint();
                 continue;
             } else {
                 if let Some(w) = self.worker.take() {
@@ -240,19 +227,21 @@ impl Manager {
                     allowed_castles: Some(locked.info.allowed_castles),
                     working: Some(false),
                     game_over: Some(false),
-                    visuals: Some(VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone()))
+                    visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
                 }).unwrap();
-                match self.receiver.recv() {
+                match self.receiver.try_recv() {
                     Ok(x) => {
                         if x.left {
                             drop(locked);
                             self.game.human_input(x.pos.unwrap_or_default(), self.game.human_player);
                         }
                     },
-                    n @ Err(mpsc::RecvError) => {
-                        panic!("{:?}", n);
-                    }
+                    n @ Err(crossbeam_channel::TryRecvError::Disconnected) => panic!("{:?}", n),
+                    Err(crossbeam_channel::TryRecvError::Empty) => ()
                 };
+                self.frame.request_repaint();
+                thread::sleep(Duration::from_millis(16));
+                continue;
             } else {
                 if self.worker.is_none() {
                     let option_player = if locked.turn == Parity::WHITE { &self.game.players.0 } else { &self.game.players.1 };
@@ -260,7 +249,7 @@ impl Manager {
                         let data = Arc::clone(&self.game.state);
                         
                         let player = Arc::clone(p);
-                        let (send, recv) = mpsc::channel();
+                        let (send, recv) = crossbeam_channel::unbounded();
                         self.working_channel_recv = Some(recv);
                         let worker = thread::spawn(move || {
                             return player.lock().unwrap().your_turn(data, send);
@@ -270,8 +259,6 @@ impl Manager {
                     }
                 }
             }
-            thread::sleep(Duration::from_millis(16));
-            self.frame.request_repaint();
         }
     }
 }

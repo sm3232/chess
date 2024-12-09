@@ -13,7 +13,7 @@ use chess::lib::mask::Mask;
 use chess::lib::piece::PieceByte;
 use eframe::egui;
 
-const FENS: [&str; 10] = [
+const FENS: [&str; 11] = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Default
     "rnbqkbnr/8/8/8/8/8/8/RNBQKBNR w KQkq - 0 1", // No Pawns
     "r/8/8/8/8/8/8/R w KQkq - 0 1", // Just rooks,
@@ -23,11 +23,12 @@ const FENS: [&str; 10] = [
     "rnbqkbnr/pppppppp/8/8/8/8/P7/K7 w KQkq - 0 1", // White only pawns
     "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e3 0 1",
     "rnbqkbnr/pppppppp/8/4B3/8/8/PPPPPPPP/RN1QKBNR w KQkq - 0 1",
-    "rnbqkbnr/pppppppp/2Q5/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 1 1"
+    "rnbqkbnr/pppppppp/2Q5/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 1 1",
+    "rnbqk2Q/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1"
     
 ];
 
-const WINDOW_SIZE: [f32; 2] = [1800.0, 800.0];
+const WINDOW_SIZE: [f32; 2] = [1800.0, 600.0];
 const PLAYING_AREA: f32 = 600.0;
 
 

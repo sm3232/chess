@@ -65,6 +65,7 @@ pub fn start_eval(state: &State) -> Evaluator {
     }
     drop(zbrist);
     if !(state.board[state.info.king_indices[0]].is_w_king() && state.board[state.info.king_indices[1]].is_b_king()) {
+        println!("King mismatch W: {}. B: {}", state.info.king_indices[0], state.info.king_indices[1]);
         evaluator.eval = i32::MIN;
         return evaluator;
     }
@@ -1765,6 +1766,25 @@ pub mod material {
             }
         }
         return total;
+    }
+    pub fn price_piece(piece: u8) -> i32 {
+        match piece.get_piece() {
+            PieceByte::PAWN => MIDGAME_PRICE[0],
+            PieceByte::KNIGHT => MIDGAME_PRICE[1],
+            PieceByte::BISHOP => MIDGAME_PRICE[2],
+            PieceByte::ROOK => MIDGAME_PRICE[3],
+            PieceByte::QUEEN => MIDGAME_PRICE[4],
+            _ => 0
+        }
+    }
+    pub fn price_parity(board: &[u8; 64], parity: Parity) -> i32 {
+        let mut sum = 0;
+        for i in 0..64 {
+            if board[i].is_parity(parity) {
+                sum += price_piece(board[i]);
+            }
+        }
+        return sum;
     }
 
     pub fn midgame_material(board: &[u8; 64]) -> i32 {

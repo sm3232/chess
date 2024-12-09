@@ -381,6 +381,13 @@ impl BoardArray for [u8; 64] {
         let original_info = current_info.clone();
 
         let original_board = self.clone();
+        if from == 65 && to == 65 {
+            if debugging_enabled {
+                println!("Null move");
+            }
+            current_info.enpassant_mask = Mask::default();
+            return (original_board, original_info);
+        }
         if !self[from].is_piece() { 
             println!("Cannot make move. No from piece at index {from}! Returning original board");
             return (original_board, original_info);
@@ -446,7 +453,7 @@ impl BoardArray for [u8; 64] {
             current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from);
             current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[to].get_parity()), to);
             if from > to {
-                current_info.king_indices[if from == 60 { 0 } else { 1 }] += 2;
+                current_info.king_indices[if self[from].is_white() { 0 } else { 1 }] = from - 2;
                 current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from - 2);
                 current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[from].get_parity()), from - 1);
                 self.swap(from, from - 2);
@@ -454,7 +461,7 @@ impl BoardArray for [u8; 64] {
                 self[from - 2] |= 0b1000_0000;
                 self[from - 1] |= 0b1000_0000;
             } else {
-                current_info.king_indices[if from == 60 { 0 } else { 1 }] -= 2;
+                current_info.king_indices[if self[from].is_white() { 0 } else { 1 }] = from + 2;
                 current_info.zkey ^= zrist.pieces(&(PieceByte::KING | self[from].get_parity()), from + 2);
                 current_info.zkey ^= zrist.pieces(&(PieceByte::ROOK | self[from].get_parity()), from + 1);
                 self.swap(from, from + 2);
@@ -636,7 +643,7 @@ impl BoardArray for [u8; 64] {
 
                 let mut wk = wking;
                 for wki in 0usize.max(wking.checked_sub(9).unwrap_or(0))..64usize.min(wking.checked_add(9).unwrap_or(64)) {
-                    if cloned[wki].is_b_king() {
+                    if cloned[wki].is_w_king() {
                         wk = wki;
                         break;
                     }

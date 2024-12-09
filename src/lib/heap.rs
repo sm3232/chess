@@ -33,7 +33,7 @@ impl Ord for EvaluatedMotion {
 type Species = EvaluatedMotion;
 
 pub struct Heap {
-    store: Vec<Species>,
+    pub store: Vec<Species>,
     pub size: usize
 }
 impl Default for Heap {
@@ -102,6 +102,9 @@ impl Heap {
     pub fn peek(&self) -> Species { self[0] }
 
     pub fn pop(&mut self) -> Species {
+        if self.store.is_empty() {
+            println!("Heap is empty! Uh oh");
+        }
         let r = self.store.swap_remove(0);
         self.size -= 1;
         self.sift(0);

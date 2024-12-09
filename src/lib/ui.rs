@@ -25,8 +25,8 @@ use eframe::egui::{self, Color32, Painter, RequestRepaintInfo};
 
 use super::manager::{SharedState, VisualInfo};
 pub struct ChessApp {
-    pub receiver: mpsc::Receiver<SharedState>,
-    pub sender: mpsc::Sender<Input>,
+    pub receiver: crossbeam_channel::Receiver<SharedState>,
+    pub sender: crossbeam_channel::Sender<Input>,
     pub paused: bool,
     pub has_human: bool,
     pub game_over: bool,
@@ -38,8 +38,8 @@ pub struct ChessApp {
 impl ChessApp {
     pub fn new(creation_context: &eframe::CreationContext<'_>, playing_area: f32, info_width: f32, init_fen: String) -> ChessApp {
         let ctx = creation_context.egui_ctx.clone();
-        let (send1, recv1) = mpsc::channel();
-        let (send2, recv2) = mpsc::channel();
+        let (send1, recv1) = crossbeam_channel::unbounded();
+        let (send2, recv2) = crossbeam_channel::unbounded();
         thread::spawn(move || Manager::init(ctx, send1, recv2, init_fen, playing_area, info_width));
         return ChessApp {
             receiver: recv1,
@@ -63,7 +63,7 @@ impl ChessApp {
                 waiting_for_a_human_input: Some(false),
                 turn: Some(Parity::WHITE),
                 moves: Some([const { Vec::new() }; 64]),
-                visuals: None,
+                visuals: VisualInfo::none(),
                 board: Some([0u8; 64])
             }
         };
@@ -128,28 +128,25 @@ impl eframe::App for ChessApp {
         return egui::Rgba::from_srgba_unmultiplied(MID_COLOR_VALUE, MID_COLOR_VALUE, MID_COLOR_VALUE, 255).to_array();
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        match self.receiver.try_recv() {
-            Ok(recvd) => {
-                if recvd.board.is_some() { self.saved.board = recvd.board };
-                if recvd.turn.is_some() { self.saved.turn = recvd.turn };
-                if recvd.waiting_for_a_human_input.is_some() { self.saved.waiting_for_a_human_input = recvd.waiting_for_a_human_input };
-                if recvd.moves.is_some() { self.saved.moves = recvd.moves };
-                if recvd.allowed_castles.is_some() { self.saved.allowed_castles = recvd.allowed_castles };
-                if recvd.working.is_some() { self.saved.working = recvd.working };
-                if recvd.game_over.is_some() { self.saved.game_over = recvd.game_over };
-                if recvd.selected.is_some() { self.saved.selected = recvd.selected };
-                if let Some(vis) = recvd.visuals {
-                    if let Some(currvis) = &mut self.saved.visuals {
-                        if vis.visual_weights.is_some() { currvis.visual_weights = vis.visual_weights }
-                        if vis.cache_saves.is_some() { currvis.cache_saves = vis.cache_saves }
-                        if vis.analyzed.is_some() { currvis.analyzed = vis.analyzed }
-                        if vis.evaluation.is_some() { currvis.evaluation = vis.evaluation }
-                        if vis.tree.is_some() { currvis.tree = vis.tree }
-                    }
-                }
-            },
-            Err(..) => ()
+        self.saved.waiting_for_a_human_input = Some(false);
+        let recvv: Vec<_> = self.receiver.try_iter().collect();
+        for recvd in recvv {
+            if recvd.board.is_some() { self.saved.board = recvd.board };
+            if recvd.turn.is_some() { self.saved.turn = recvd.turn };
+            if recvd.waiting_for_a_human_input.is_some() { self.saved.waiting_for_a_human_input = recvd.waiting_for_a_human_input };
+            if recvd.moves.is_some() { self.saved.moves = recvd.moves };
+            if recvd.allowed_castles.is_some() { self.saved.allowed_castles = recvd.allowed_castles };
+            if recvd.working.is_some() { self.saved.working = recvd.working };
+            if recvd.game_over.is_some() { self.saved.game_over = recvd.game_over };
+            if recvd.selected.is_some() { self.saved.selected = recvd.selected };
+            if recvd.visuals.visual_weights.is_some() { self.saved.visuals.visual_weights = recvd.visuals.visual_weights }
+            if recvd.visuals.cache_saves.is_some() { self.saved.visuals.cache_saves = recvd.visuals.cache_saves }
+            if recvd.visuals.analyzed.is_some() { self.saved.visuals.analyzed = recvd.visuals.analyzed }
+            if recvd.visuals.evaluation.is_some() { self.saved.visuals.evaluation = recvd.visuals.evaluation }
+            if recvd.visuals.tree.is_some() { self.saved.visuals.tree = recvd.visuals.tree }
         }
+
+
         let input = collect_input(ctx);
         if input.wants_escape {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
@@ -214,10 +211,9 @@ impl eframe::App for ChessApp {
                         ui.label(egui::RichText::new("Evaluation").monospace());
                     
                         // ui.label(egui::RichText::new(pretty_string_evaluator(state.visuals.evaluation.as_ref().unwrap())));
-                        if let Some(vis) = &self.saved.visuals {
-                            if let Some(ev) = &vis.evaluation {
-                                ui.label(egui::RichText::new(pretty_string_evaluator(&ev)));
-                            }
+                        if self.saved.visuals.evaluation.is_some() {
+                            ui.label(egui::RichText::new(pretty_string_evaluator(self.saved.visuals.evaluation.as_ref().unwrap())));
+
                         }
 
                         let (_, weight_rect) = ui.allocate_space(egui::Vec2 { x: WEIGHT_VIS_SIZE, y: WEIGHT_VIS_SIZE });
@@ -238,18 +234,22 @@ impl eframe::App for ChessApp {
                                 }
                             }
                         }
-                        if let Some(vis) = &self.saved.visuals {
-                            ui.label(egui::RichText::new(format!("Searched {} positions", vis.analyzed.unwrap_or(0))));
-                            ui.label(egui::RichText::new(format!("Saved {} searches with caching", vis.cache_saves.unwrap_or(0))));
-                        }
+                        ui.spacing_mut().item_spacing = egui::Vec2 { x: 15.0, y: 2.5 };
+                        ui.label(egui::RichText::new(format!("Searched {} positions", self.saved.visuals.analyzed.unwrap_or(0))));
+                        ui.label(egui::RichText::new(format!("Saved {} searches with caching", self.saved.visuals.cache_saves.unwrap_or(0))));
                     });
                     let (_, tree_rect) = ui.allocate_space(egui::Vec2 { x: ui.available_width(), y: ui.available_height() * 2.0 });
                     let tree_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("tree_painter")), tree_rect);
+                    if let Some(tree) = &mut self.saved.visuals.tree {
+                        SearchTree::display(tree, ui, &tree_painter);
+                    }
+
+                    /*
                     if let Some(vis) = &self.saved.visuals {
                         if let Some(tree) = &vis.tree {
                             // SearchTree::display(tree, ui, &tree_painter);
                         }
-                    }
+                    }*/
                     /*
                     if self.saved.working.unwrap() {
 
@@ -261,7 +261,7 @@ impl eframe::App for ChessApp {
                 });
 
             });
-            if self.saved.waiting_for_a_human_input.unwrap() {
+            if self.saved.waiting_for_a_human_input.unwrap() && input.left {
                 let _ = self.sender.send(input).unwrap();
             }
         });
