@@ -1,7 +1,6 @@
-use std::{cell::RefCell, rc::Rc, sync::{mpsc, Arc, Mutex}};
+use std::sync::{Arc, Mutex};
 
 use crate::lib::{
-    searchtree::SearchTree,
     piece::Parity,
     state::State
 };

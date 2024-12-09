@@ -1,13 +1,10 @@
 
 use eframe::egui;
-use std::{cell::RefCell, collections::{HashMap, HashSet}, ops::Deref, rc::Rc, sync::{mpsc, Arc, Mutex}, thread::{JoinHandle, Thread}, time::{self, Duration}};
+use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
 use std::thread;
-use crossbeam_channel::unbounded;
-
 use crate::lib::{
     eval::{self, Evaluator}, 
     game::ChessGame, 
-    heap::Heap, 
     piece::Parity, 
     player::Player, 
     searcher::Searcher, 
@@ -21,25 +18,31 @@ pub struct VisualInfo {
     pub analyzed: Option<usize>,
     pub evaluation: Option<Evaluator>,
     pub tree: Option<SearchTree>,
+    pub mtm: Option<Motion>,
+    pub considerations: Option<Vec<EvaluatedMotion>>
 }
 impl VisualInfo {
-    pub fn none() -> Self { Self { analyzed: None, cache_saves: None, tree: None, evaluation: None, visual_weights: None } }
+    pub fn none() -> Self { Self { analyzed: None, cache_saves: None, tree: None, evaluation: None, visual_weights: None, mtm: None, considerations: None } }
     pub fn weight_eval(weights: &Option<[i32; 64]>, evaluator: Evaluator) -> Self {
         Self {
             visual_weights: *weights,
             evaluation: Some(evaluator),
             tree: None,
             cache_saves: None,
-            analyzed: None
+            analyzed: None,
+            mtm: None,
+            considerations: None
         }
     }
-    pub fn all(weights: &[i32; 64], evaluator: Evaluator, tree: SearchTree, cache: usize, analyze: usize) -> Self {
+    pub fn all(weights: &[i32; 64], evaluator: Evaluator, tree: SearchTree, cache: usize, analyze: usize, mtm: Motion, considerations: &Vec<EvaluatedMotion>) -> Self {
         Self {
             visual_weights: Some(*weights),
             evaluation: Some(evaluator),
             tree: Some(tree),
             analyzed: Some(analyze),
-            cache_saves: Some(cache)
+            cache_saves: Some(cache),
+            mtm: Some(mtm),
+            considerations: Some(considerations.to_vec())
         }
     }
 }
@@ -75,7 +78,7 @@ impl ManagerPlayer {
             parity,
             searcher: Searcher {
                 tree: Vec::new(),
-                time_limit: time::Duration::from_secs_f32(0.5),
+                time_limit: time::Duration::from_secs_f32(1.0),
                 tt: HashMap::new(),
                 driver: SearchDriver::default(),
                 mtm: Motion::default(),
@@ -201,7 +204,9 @@ impl Manager {
                                 self.current_eval.clone(),
                                 last.tree.clone(),
                                 last.cache_saves,
-                                last.positions_looked_at
+                                last.positions_looked_at,
+                                last.mtm,
+                                &last.considerations
                             )
                         });
                     }
@@ -234,6 +239,19 @@ impl Manager {
                         if x.left {
                             drop(locked);
                             self.game.human_input(x.pos.unwrap_or_default(), self.game.human_player);
+                            let locked = self.game.state.lock().unwrap();
+                            let _ = self.sender.send(SharedState {
+                                waiting_for_a_human_input: None,
+                                turn: Some(locked.turn),
+                                moves: Some(locked.moves.parity_moves(locked.turn)),
+                                selected: Some(self.game.selected),
+                                board: Some(locked.board),
+                                allowed_castles: Some(locked.info.allowed_castles),
+                                working: Some(false),
+                                game_over: Some(false),
+                                visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
+                            }).unwrap();
+                            drop(locked);
                         }
                     },
                     n @ Err(crossbeam_channel::TryRecvError::Disconnected) => panic!("{:?}", n),

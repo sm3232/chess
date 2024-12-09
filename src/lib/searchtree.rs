@@ -1,10 +1,7 @@
 use core::f32;
-use std::{borrow::{Borrow, BorrowMut}, cell::RefCell, ops::{Deref, DerefMut, IndexMut}, ptr, rc::Rc, sync::{Arc, Mutex, MutexGuard}};
+use std::ops::IndexMut;
 
 use eframe::egui;
-use rand_chacha::{rand_core::SeedableRng, ChaCha8Rng};
-use rand_distr::{Distribution, Normal};
-use voxell_rng::rng::XorShift32;
 
 
 use super::piece::Parity;

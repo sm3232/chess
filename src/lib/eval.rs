@@ -1,7 +1,5 @@
-use stanza::renderer::{console::Console, Renderer};
-
 use crate::lib::{
-    boardarray::BoardArray, chessbyte::ChessByte, cutil::pretty_print::{pretty_print_board, pretty_print_mask}, mask::{DepthMask, Mask}, piece::{Parity, PieceByte}, state::State
+    boardarray::BoardArray, chessbyte::ChessByte, piece::{Parity, PieceByte}, state::State
 };
 
 #[derive(Clone)]
@@ -37,20 +35,7 @@ impl Evaluator {
         self.eval *= (100 - halfmove as i32) / 100;
     }
 }
-fn flip_castles(castles: u8) -> u8 {
-    let low = castles & 0b0000_0011;
-    let high = castles & 0b0000_1100;
-    return (low << 2) | (high >> 2);
-}
 
-    /*
-    v += mobility_mg(pos) - mobility_mg(colorflip(pos));
-    v += threats_mg(pos) - threats_mg(colorflip(pos));
-    v += passed_mg(pos) - passed_mg(colorflip(pos));
-    v += space(pos) - space(colorflip(pos));
-    v += king_mg(pos) - king_mg(colorflip(pos));
-    if (!nowinnable) v += winnable_total_mg(pos, v);
-    */
 const DO_TIMING: bool = false;
 pub fn start_eval(state: &State) -> Evaluator {
     let mut evaluator = Evaluator {
@@ -98,40 +83,23 @@ pub fn start_eval(state: &State) -> Evaluator {
     if DO_TIMING { println!("Pieces {:.2?}", ev.elapsed()) };
 
     ev = std::time::Instant::now();
-    if state.turn == Parity::WHITE {
-        evaluator.push("Tempo", general::tempo(state.turn), 0);
-    } else {
-        evaluator.push("Tempo", 0, general::tempo(state.turn));
-    }
-    if DO_TIMING { println!("Tempo {:.2?}", ev.elapsed()) };
-
-    ev = std::time::Instant::now();
     evaluator.push("Mobility", mobility::bonus(&state.board, &state.moves), -mobility::bonus(&flipped.board, &fmoves));
     if DO_TIMING { println!("Mobility {:.2?}", ev.elapsed()) };
 
     ev = std::time::Instant::now();
     evaluator.push("Threats", threats::threats(&state.board, &state.moves, &state.info.maskset, state.info.king_indices[0]), -threats::threats(&flipped.board, &fmoves, &flipped.maskset, flipped.king_indices[0]));
     if DO_TIMING { println!("Threats {:.2?}", ev.elapsed()) };
-    // mobility 
-    // threats 
-    // evaluator.push("Passed", general::passed(&state.board, &flipped.board, &state.moves, &flipped_moves), -general::passed(&flipped.board, &state.board, &flipped_moves, &state.moves));
-    // space 
-    // king 
-    // winnable
-    
-    /*
-    let mut endgame = endgame_eval(state);
-    
-    let phase = phase(&state.board);
-    endgame *- scale_factor()
 
-    eg = eg * scale_factor(pos, eg) / 64;
-    var v = (((mg * p + ((eg * (128 - p)) << 0)) / 128) << 0);
-    if (arguments.length == 1) v = ((v / 16) << 0) * 16;
-    
-    */
-    // midgame += tempo(pos);
-    // v = (v * (100 - rule50) / 100) << 0;
+    ev = std::time::Instant::now();
+    evaluator.push("Passed", general::passed(&state.board, &state.moves, &state.info.maskset), -general::passed(&flipped.board, &fmoves, &flipped.maskset));
+    if DO_TIMING { println!("Passed {:.2?}", ev.elapsed()) };
+    ev = std::time::Instant::now();
+    if state.turn == Parity::WHITE {
+        evaluator.push("Tempo", general::tempo(state.turn), 0);
+    } else {
+        evaluator.push("Tempo", 0, general::tempo(state.turn));
+    }
+    if DO_TIMING { println!("Tempo {:.2?}", ev.elapsed()) };
     evaluator.finalize(state.info.halfmove_clock);
     let mut zbrist2 = state.zobrist.lock().unwrap();
     zbrist2.save((state.info.clone(), state.moves.clone(), Some(evaluator.clone())));
@@ -140,16 +108,9 @@ pub fn start_eval(state: &State) -> Evaluator {
 
 }
 mod threats {
-    use stanza::renderer::{console::Console, Renderer};
 
-    use crate::lib::{
-        chessbyte::ChessByte, cutil::pretty_print::{pretty_print_mask, pretty_print_masks, pretty_print_value_mask, value_mask_to_table}, mask::{Mask, ValueMask}, maskset::MaskSet, motion::{Motion, MotionSet}, piece::{
-            Parity, 
-            PieceByte
-        }
-    };
+    use crate::lib::{ chessbyte::ChessByte, mask::{Mask, ValueMask}, maskset::MaskSet, motion::MotionSet, piece::PieceByte };
 
-    use super::{baccess, general::count_attacks, mobility::mobility_area};
     pub const WEIGHT_HANGING_THREAT: i32 = 69;
     pub const WEIGHT_KING_THREAT: i32 = 24;
     pub const WEIGHT_PAWN_PUSH: i32 = 48;
@@ -160,210 +121,10 @@ mod threats {
     pub const WEIGHT_WEAK_QUEEN_PROTECTION: i32 = 14;
     pub const WEIGHT_MINOR_THREAT: [i32; 5] = [5, 57, 77, 88, 79];
     pub const WEIGHT_ROOK_THREAT: [i32; 5] = [3, 37, 42, 0, 58];
-    fn weak_enemy(board: &[u8; 64], flipped: &[u8; 64], index: usize, moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64]) -> i32 {
-        if board[index].is_black() || !board[index].is_piece() { return 0 };
-        let xi = index % 8;
-        let yi = index / 8;
-        if baccess(board, xi.checked_sub(1), yi.checked_sub(1)).is_b_pawn() { return 0 };
-        if baccess(board, xi.checked_add(1), yi.checked_add(1)).is_b_pawn() { return 0 };
-        if count_attacks(board, moves, index) <= 1 && count_attacks(flipped, flipped_moves, (7 - yi) * 8 + xi) > 1 {
-            return 0;
-        }
-        return 1;
-    }
-    fn hanging(board: &[u8; 64], flipped: &[u8; 64], index: usize, moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64]) -> i32 {
-        if weak_enemy(board, flipped, index, moves, flipped_moves) == 0 { return 0 };
-        if !board[index].is_b_pawn() && count_attacks(board, moves, index) > 1 { return WEIGHT_HANGING_THREAT };    
-        let xi = index % 8;
-        let yi = index / 8 ;
-        if count_attacks(flipped, flipped_moves, (7 - yi) * 8 + xi) > 1 {
-            return WEIGHT_HANGING_THREAT;
-        }
-        return 0;
-    }
-    fn sum_of_calls(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], func: fn(&[u8; 64], &[u8; 64], &[Vec<Motion>; 64],&[Vec<Motion>; 64], Option<usize>) -> i32) -> i32 {
-        let mut sum = 0;
-        for i in 0..64 {
-            sum += func(board, flipped, moves, flipped_moves, Some(i));
-        }
-        return sum;
-    }
-    fn pawn_push(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], index: Option<usize>) -> i32 {
-        if let Some(i) = index {
-            let xi = i % 8;
-            let yi = i / 8;
-            if !board[i].is_black() || !board[i].is_piece() { return 0 };
-            if baccess(board, xi.checked_sub(1), yi.checked_add(2)).is_w_pawn() 
-                && !baccess(board, xi.checked_sub(1), yi.checked_add(1)).is_piece() 
-                    && !baccess(board, xi.checked_sub(2), Some(yi)).is_b_pawn() 
-                    && !baccess(board, Some(xi), Some(yi)).is_b_pawn() {
-                        if let Some(addx) = xi.checked_sub(1) {
-                            if let Some(addy) = yi.checked_add(1) {
-                                if count_attacks(board, moves, addy * 8 + addx) > 0 {
-                                    return 1;
-                                }
-                            }
-                            if let Some(addy) = 6usize.checked_sub(yi) {
-                                if count_attacks(flipped, flipped_moves, addy * 8 + addx) == 0 {
-                                    return 1;
-                                }
-                            }
-                        }
-                    }
-            if yi == 3
-                && baccess(board, xi.checked_sub(1), yi.checked_add(3)).is_w_pawn() 
-                    && !baccess(board, xi.checked_sub(1), yi.checked_add(2)).is_piece()
-                    && !baccess(board, xi.checked_sub(1), yi.checked_add(1)).is_piece()
-                    && !baccess(board, xi.checked_sub(2), Some(yi)).is_b_pawn()
-                    && !baccess(board, Some(xi), Some(yi)).is_b_pawn() {
-                        if let Some(addx) = xi.checked_sub(1) {
-                            if let Some(addy) = yi.checked_add(1) {
-                                if count_attacks(board, moves, addy * 8 + addx) > 0 {
-                                    return 1;
-                                }
-                            }
-                            if let Some(addy) = 6usize.checked_sub(yi) {
-                                if count_attacks(flipped, flipped_moves, addy * 8 + addx) == 0 {
-                                    return 1;
-                                }
-                            }
-                        }
-
-                    }
-            if baccess(board, xi.checked_add(1), yi.checked_add(2)).is_w_pawn() 
-                && !baccess(board, xi.checked_add(1), yi.checked_add(1)).is_piece() 
-                    && !baccess(board, Some(xi), Some(yi)).is_b_pawn() 
-                    && !baccess(board, xi.checked_add(2), Some(yi)).is_b_pawn() {
-                        if let Some(addx) = xi.checked_add(1) {
-                            if let Some(addy) = yi.checked_add(1) {
-                                if count_attacks(board, moves, addy * 8 + addx) > 0 {
-                                    return 1;
-                                }
-                            }
-                            if let Some(addy) = 6usize.checked_sub(yi) {
-                                if count_attacks(flipped, flipped_moves, addy * 8 + addx) == 0 {
-                                    return 1;
-                                }
-                            }
-                        }
-                    }
-            if yi == 3
-                && baccess(board, xi.checked_add(1), yi.checked_add(3)).is_w_pawn() 
-                    && !baccess(board, xi.checked_add(1), yi.checked_add(2)).is_piece()
-                    && !baccess(board, xi.checked_add(1), yi.checked_add(1)).is_piece()
-                    && !baccess(board, Some(xi), Some(yi)).is_b_pawn()
-                    && !baccess(board, xi.checked_add(2), Some(yi)).is_b_pawn() {
-                        if let Some(addx) = xi.checked_add(1) {
-                            if let Some(addy) = yi.checked_add(1) {
-                                if count_attacks(board, moves, addy * 8 + addx) > 0 {
-                                    return 1;
-                                }
-                            }
-                            if let Some(addy) = 6usize.checked_sub(yi) {
-                                if count_attacks(flipped, flipped_moves, addy * 8 + addx) == 0 {
-                                    return 1;
-                                }
-                            }
-                        }
-
-                    }
-            return 0;
-        } else {
-            return WEIGHT_PAWN_PUSH * sum_of_calls(board, flipped, moves, flipped_moves, pawn_push);
-        }
-    }
-    fn defended_by_any_count(board: &[u8; 64], moves: &[Vec<Motion>; 64], index: usize) -> i32 {
-        let mut count = 0;
-        for i in 0..64 {
-            if board[i].is_piece() && board[i].is_parity(board[index].get_parity()) {
-                for m in &moves[i] {
-                    if m.to == index {
-                        count += 1;
-                        break;
-                    }
-                }
-            }
-        }
-        return count;
-    }
-    fn safe_pawn(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], index: usize) -> i32 {
-        if board[index].is_w_pawn() {
-            if defended_by_any_count(board, moves, index) > 0 { return 1 };
-            if count_attacks(flipped, flipped_moves, index) == 0 { return 1 };
-        }
-        return 0;
-    }
-    fn pawn_attack(board: &[u8; 64], index: usize) -> i32 {
-        let mut value = 0;
-        let xi = index % 8;
-        let yi = index / 8;
-        if yi < 7 {
-            if xi > 0 && board[index + 7].is_w_pawn() { value += 1 };
-            if xi < 7 && board[index + 9].is_w_pawn() { value += 1 };
-        }
-        return value;
-    }
-    fn safe_pawn_threat(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], index: Option<usize>) -> i32 {
-        if let Some(i) = index {
-            if !board[i].is_piece() || !board[i].is_black() || board[i].is_pawn() || board[i].is_king() { return 0 };
-            if pawn_attack(board, i) == 0 { return 0 };
-            let xi = i % 8;
-            let yi = i / 8;
-            if yi < 7 {
-                if xi > 0 && safe_pawn(board, flipped, moves, flipped_moves, i + 7) > 0 { return 1 };
-                if xi < 7 && safe_pawn(board, flipped, moves, flipped_moves, i + 9) > 0 { return 1 };
-            }
-            return 0;
-        } else {
-            return WEIGHT_SAFE_PAWN * sum_of_calls(board, flipped, moves, flipped_moves, safe_pawn_threat)
-        }
-    }
-    fn would_threaten_index(board: &[u8; 64], index_from: usize, index_to: usize, focus: usize) -> bool {
-        let xto = index_to % 8;
-        let yto = index_to / 8;
-        let xfocus = focus % 8;
-        let yfocus = focus / 8;
-        if board[index_from].is_rook() {
-            if xto == xfocus || yto == yfocus {
-                return true;
-            }
-        } else if board[index_from].is_bishop() {
-            if xto.abs_diff(xfocus) == yto.abs_diff(yfocus) {
-                return true;
-            }
-        } else if board[index_from].is_knight() {
-            if xto.abs_diff(xfocus) == 2 && yto.abs_diff(yfocus) == 1 {
-                return true;
-            }
-            if xto.abs_diff(xfocus) == 1 && yto.abs_diff(yfocus) == 2 {
-                return true;
-            }
-        }
-        return false;
-    }
-    fn queen_knight(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], queen: usize, index: Option<usize>) -> i32 {
-        if let Some(i) = index {
-            if board[i].is_w_knight() {
-                for m in &moves[i] {
-                    if would_threaten_index(board, m.from, m.to, queen) {
-                        return 1;
-                    }
-                }
-            }
-            return 0;
-        } else {
-            let mut sum = 0;
-            for i in 0..64 {
-                sum += queen_knight(board, flipped, moves, flipped_moves, queen, Some(i));
-            }
-            return WEIGHT_QUEEN_KNIGHT * sum;
-        }
-
-    }
     fn restricted_threat(moves: &MotionSet) -> u32 {
         return (moves.white_flat & (moves.black_defensive_flat | moves.black_flat)).bit_count();
     }
-    fn threat_values(moves: &MotionSet, maskset: &MaskSet) -> ValueMask {
+    pub fn threat_values(moves: &MotionSet, maskset: &MaskSet) -> ValueMask {
         let mut vals = ValueMask::default();
         let mut mask = Mask::zz();
         loop {
@@ -386,28 +147,6 @@ mod threats {
         return (vm.to_mask(1) & moves.black_defensive_piecewise_flat[queen] & (moves.white_flat & maskset.black)).bit_count();
 
     }
-    /*
-    fn weak_queen_protection(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], queen: usize, index: Option<usize>) -> i32 {
-        if let Some(i) = index {
-            if weak_enemy(board, flipped, i, moves, flipped_moves) == 0 { return 0 };
-            let qx = queen % 8;
-            let qy = queen / 8;
-            let qf = (7 - qy) * 8 + qx;
-            for m in &flipped_moves[qf] {
-                if m.to == i {
-                    return 1;
-                }
-            }
-            return 0;
-        } else {
-            let mut sum = 0;
-            for i in 0..64 {
-                sum += weak_queen_protection(board, flipped, moves, flipped_moves, queen, Some(i));
-            }
-            return WEIGHT_WEAK_QUEEN_PROTECTION * sum;
-        }
-    }
-    */
     fn pawn_push_threat(board: &[u8; 64], moves: &MotionSet, maskset: &MaskSet) -> u32 {
         let mut c = 0;
         for i in 16..56 {
@@ -436,43 +175,10 @@ mod threats {
         }
         return c;
     }
-    /*
-    fn king_threat(board: &[u8; 64], flipped: &[u8; 64], index: usize, moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], king: usize) -> i32 {
-
-        if !board[index].is_piece() || !board[index].is_black() { return 0 };
-        if weak_enemy(board, flipped, index, moves, flipped_moves) == 0 { return 0 };
-        for m in &moves[king] {
-            if m.to == index {
-                return WEIGHT_KING_THREAT;
-            }
-        }
-        return 0;
-    }
-    */
     fn king_threat(moves: &MotionSet, maskset: &MaskSet, king: usize) -> u32 {
         return (moves.white_piecewise_flat[king] & maskset.black & moves.black_defensive_flat.get_not()).bit_count();
     }
-    fn queen_slider(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], queen: usize, index: Option<usize>) -> i32 {
-        if let Some(i) = index {
-            if board[i].is_white() {
-                if board[i].is_rook() || board[i].is_bishop() {
-                    for m in &moves[i] {
-                        if would_threaten_index(board, m.from, m.to, queen) {
-                            return 1;
-                        }
-                    }
-                }
-            }
-            return 0;
-        } else {
-            let mut sum = 0;
-            for i in 0..64 {
-                sum += queen_slider(board, flipped, moves, flipped_moves, queen, Some(i));
-            }
-            return WEIGHT_QUEEN_SLIDER * sum;
-        }
-    }
-    fn queen_knight_threat(board: &[u8; 64], moves: &MotionSet, maskset: &MaskSet, queen: usize) -> u32 {
+    fn queen_knight_threat(board: &[u8; 64], moves: &MotionSet, queen: usize) -> u32 {
         let qm = Mask::from_index(queen);
         let knightish = qm.get_knightish();
         let anded = knightish & moves.white_flat & moves.black_defensive_flat.get_not();
@@ -487,7 +193,7 @@ mod threats {
         }
         return c;
     }
-    fn queen_slide_threat(board: &[u8; 64], moves: &MotionSet, maskset: &MaskSet, queen: usize) -> u32 {
+    fn queen_slide_threat(moves: &MotionSet, queen: usize) -> u32 {
         let qm = Mask::from_index(queen);
         let qx = queen % 8;
         let qy = queen / 8;
@@ -553,8 +259,6 @@ mod threats {
         return c;
     }
     pub fn threats(board: &[u8; 64], moves: &MotionSet, maskset: &MaskSet, king_index: usize) -> i32 {
-
-    // pub fn threats(board: &[u8; 64], moves: &[Vec<Motion>; 64], flipped: &[u8; 64], flipped_moves: &[Vec<Motion>; 64], flat: &MaskSet, maskset: &MaskSet, simple_moves: &[Mask; 64]) -> i32 {
         let mut wqueen: Vec<usize> = Vec::new();
         let mut bqueen: Vec<usize> = Vec::new();
         for i in 0..64 {
@@ -574,224 +278,106 @@ mod threats {
         let mut queen_knight = 0;
         let mut queen_weak_protection = 0;
         for bq in bqueen {
-            queen_slider += WEIGHT_QUEEN_SLIDER * queen_slide_threat(board, moves, maskset, bq) as i32;
-            queen_knight += WEIGHT_QUEEN_KNIGHT * queen_knight_threat(board, moves, maskset, bq) as i32;
+            queen_slider += WEIGHT_QUEEN_SLIDER * queen_slide_threat(moves, bq) as i32;
+            queen_knight += WEIGHT_QUEEN_KNIGHT * queen_knight_threat(board, moves, bq) as i32;
             queen_weak_protection += WEIGHT_WEAK_QUEEN_PROTECTION * weak_queen_protection(board, moves, maskset, bq) as i32;
         }
         let minor = minor_threat(board, moves, maskset, &threat_vals);
         let rook = rook_threat(board, moves, maskset, &threat_vals);
-
-        /*
-        println!("Restricted: {restricted}");
-        println!("Hanging: {hanging}");
-        println!("Pawn Push: {pawn_push}");
-        println!("Safe Pawn: {safe_pawn}");
-        println!("King: {king_threat}");
-        println!("Queen Slider: {queen_slider}");
-        println!("Queen Knight: {queen_knight}");
-        println!("Queen Weak Protection: {queen_weak_protection}");
-        println!("Minor: {minor}");
-        println!("Rook: {rook}");
-        */
-
         return restricted + hanging + pawn_push + safe_pawn + king_threat + queen_slider + queen_knight + queen_weak_protection + minor + rook;
     }
 
 }
-
-
-fn baccess(board: &[u8; 64], xi: Option<usize>, yi: Option<usize>) -> u8 {
-    if let (Some(x), Some(y)) = (xi, yi) {
-        if x < 8 && y < 8 && y * 8 + x < 64 {
-            return board[y * 8 + x];
-        }
-    }
-    return 0u8;
-}
-mod captures {
-    use crate::lib::{
-        chessbyte::ChessByte, motion::Motion, piece::{Parity, PieceByte}
-    };
-    use super::material;
-
-    const WEIGHT_CAPTURE: i32 = -1;
-    pub fn captures(board: &[u8; 64], moves: &[Vec<Motion>; 64]) -> i32 {
-        let mut value = 0;
-        for i in 0..64 {
-            if board[i].is_white() {
-                for m in &moves[i] {
-                    if board[m.to].is_piece() {
-                        value += material::material_value_of_index(board, m.to);
-                    }
-                }
-            }
-        }
-        return value * WEIGHT_CAPTURE;
-    }
-}
 mod general {
     use crate::lib::{
-        chessbyte::ChessByte, motion::Motion, piece::{Parity, PieceByte}
+        chessbyte::ChessByte, mask::{Mask, ValueMask}, maskset::MaskSet, motion::MotionSet, piece::Parity
     };
 
-    use super::baccess;
+    use super::threats::threat_values;
     const WEIGHT_TEMPO: i32 = 28;
-    const WEIGHT_PASSED_FILE: i32 = -11;
     pub fn tempo(parity: Parity) -> i32 { WEIGHT_TEMPO * if parity == Parity::WHITE { 1 } else { -1 } }
-    fn supported(board: &[u8; 64], index: usize) -> i32 {
-        let xi = index % 8;
-        let yi = index / 8;
-        return if baccess(board, xi.checked_sub(1), yi.checked_add(1)).is_w_pawn() { 1 } else { 0 }
-            + if baccess(board, xi.checked_add(1), yi.checked_add(1)).is_w_pawn() { 1 } else { 0 };
-    }
-
-    fn index_passed(board: &[u8; 64], index: usize) -> i32 {
-        let xi = index % 8;
-        let yi = index / 8;
-        let mut yc1 = 8;
-        let mut yc2 = 8;
-        if board[index].is_white() && board[index].is_pawn() {
-            if yi > 0 {
-                for y in (yi - 1)..=0 {
-                    if board[y * 8 + xi].is_piece() && board[y * 8 + xi].is_pawn() {
-                        if board[y * 8 + xi].is_white() { return 0 };
-                        yc1 = y;
-                    }
-                    if y * 8 + xi > 0 && board[y * 8 + xi - 1].is_pawn() && board[y * 8 + xi - 1].is_black() {
-                        yc2 = y;
-                    }
-                    if y * 8 + xi < 63 && board[y * 8 + xi + 1].is_pawn() && board[y * 8 + xi + 1].is_black() {
-                        yc2 = y;
-                    }
-                }
-                if yc1 == 8 && yc2 >= yi - 1 {
-                    return 1;
-                }
-                if yi > 1 && (yc2 < yi - 2 || yc1 < yi - 1) { return 0 };
-                if yc2 >= yi && yc1 == yi - 1 && yi < 4 {
-                    if baccess(board, xi.checked_sub(1), yi.checked_add(1)).is_w_pawn() 
-                        && !baccess(board, xi.checked_sub(1), Some(yi)).is_b_pawn()
-                        && !baccess(board, xi.checked_sub(2), yi.checked_sub(1)).is_b_pawn() { return 1 };
-                    if baccess(board, xi.checked_add(1), yi.checked_add(1)).is_w_pawn() 
-                        && !baccess(board, xi.checked_add(1), Some(yi)).is_b_pawn()
-                        && !baccess(board, xi.checked_add(2), yi.checked_sub(1)).is_b_pawn() { return 1 };
-                }
-                if baccess(board, Some(xi), yi.checked_sub(1)).is_b_pawn() { return 0 };
-                let lev = if baccess(board, xi.checked_sub(1), yi.checked_sub(1)).is_b_pawn() { 1 } else { 0 } + if baccess(board, xi.checked_add(1), yi.checked_sub(1)).is_b_pawn() { 1 } else { 0 };
-
-                let levp = if baccess(board, xi.checked_sub(1), yi.checked_sub(2)).is_b_pawn() { 1 } else { 0 } + if baccess(board, xi.checked_add(1), yi.checked_sub(2)).is_b_pawn() { 1 } else { 0 };
-
-                let phal = if baccess(board, xi.checked_sub(1), Some(yi)).is_b_pawn() { 1 } else { 0 } + if baccess(board, xi.checked_add(1), Some(yi)).is_b_pawn() { 1 } else { 0 };
-
-                if lev - supported(board, index) > 1 { return 0 };
-                if levp - phal > 0 { return 0 };
-                if lev > 0 && levp > 0 { return 0 };
-                return 1;
-            }
-        }
-        return 0;
-
-    }
-    pub fn count_attacks(board: &[u8; 64], moves: &[Vec<Motion>; 64], index: usize) -> i32 {
-        let mut count = 0;
-        for i in 0..64 {
-            if board[i].is_parity(board[index].get_parity()) {
-                continue;
-            }
-            for m in &moves[i] {
-                if m.to == index {
-                    count += 1;
-                }
-            }
-        }
-        return count;
-    }
-    fn passed_lev(board: &[u8; 64], flipped: &[u8; 64], index: usize, moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64]) -> bool {
-        if index_passed(board, index) == 0 { return false };
-        let xi = index % 8;
-        let yi = index / 8;
-        if !baccess(board, Some(xi), yi.checked_sub(1)).is_b_pawn() { return true };
-        if baccess(board, xi.checked_sub(1), yi.checked_add(1)).is_w_pawn() {
-            if baccess(board, xi.checked_sub(1), Some(yi)).is_white() {
-                if count_attacks(board, moves, index - 1) > 0 || count_attacks(flipped, flipped_moves, (7 - yi) * 8 + xi - 1) < 2 {
-                    return true;
-                }
-            }
-        }
-        if baccess(board, xi.checked_add(1), yi.checked_add(1)).is_w_pawn() {
-            if baccess(board, xi.checked_add(1), Some(yi)).is_white() {
-                if count_attacks(board, moves, index + 1) > 0 || count_attacks(flipped, flipped_moves, (7 - yi) * 8 + xi + 1) < 2 {
-                    return true;
-                }
-            }
-        }
-        return false;
-    }
-    fn passed_block(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64], index: usize) -> i32 {
-        let xi = index % 8;
-        let yi = index / 8;
-        if 8 - yi < 4 {
-            return 0;
-        }
-        if baccess(board, Some(xi), yi.checked_sub(1)).is_piece() {
-            return 0;
-        }
-        let rank = 8 - yi - 1;
-        let weight = if rank > 2 { 5 * rank - 13 } else { 0 };
-        let mut defend = 0;
-        let mut threatened = 0;
-        let mut whitethreatened = 0;
-        let mut defend1 = 0;
-        let mut threatened1 = 0;
-        for y in (yi - 1)..=0 {
-            if count_attacks(board, moves, y * 8 + xi) > 0 {
-                defend += 1;
-            }
-            if count_attacks(flipped, flipped_moves, (7 - y) * 8 + xi) > 0 {
-                threatened += 1;
-            }
-            if count_attacks(flipped, flipped_moves, (7 - y) * 8 + xi - 1) > 0 {
-                whitethreatened += 1;
-            }
-            if count_attacks(flipped, flipped_moves, (7 - y) * 8 + xi + 1) > 0 {
-                whitethreatened += 1;
-            }
-            if y == yi - 1 {
-                defend1 = defend;
-                threatened1 = threatened;
-            }
-        }
-        for y in (yi + 1)..8 {
-            if board[y * 8 + xi].is_w_rook() || board[y * 8 + xi].is_w_queen() {
-                defend1 = y;
-            }
-            if board[y * 8 + xi].is_b_rook() || board[y * 8 + xi].is_b_queen() {
-                threatened = y;
-                threatened1 = y;
-            }
-        }
-        let k = (if threatened == 0 && whitethreatened == 0 { 35 } else if threatened == 0 { 20 } else if threatened1 == 0 { 9 } else { 0 })
-            + if defend1 != 0 { 5 } else { 0 };
-        return weight as i32 * k;
-    }
 
     const WEIGHT_PASSED_RANK: [i32; 7] = [0, 10, 17, 15, 62, 168, 276];
-    pub fn passed(board: &[u8; 64], flipped: &[u8; 64], moves: &[Vec<Motion>; 64], flipped_moves: &[Vec<Motion>; 64]) -> i32 {
-        let mut value = 0;
-        for i in 0..64 {
-            if board[i].is_white() && passed_lev(board, flipped, i, moves, flipped_moves) {
-                value += WEIGHT_PASSED_RANK[8 - (i / 8) - 1];
-                value += passed_block(board, flipped, moves, flipped_moves, i);
-                value += WEIGHT_PASSED_FILE * (i % 8).min(7 - (i % 8)) as i32;
+    const WEIGHT_COMPOUNDING_PASSED: [i32; 5] = [2, 7, 12, 17, 22];
+    const WEIGHT_COMPOUNDING_MULT: i32 = 70;
+    const WEIGHT_PASSED_FILE: i32 = -11;
+    fn passed_candidate(board: &[u8; 64], maskset: &MaskSet, tvals: &ValueMask, index: usize) -> bool {
+        let yi = index / 8;
+        let xi = index % 8;
+        let im = Mask::from_index(index);
+        let col = Mask::of_column(xi);
+        for iso in &(maskset.white & Mask::all_rows_above(yi) & col).isolated_bits() {
+            let isoi = iso.as_index();
+            if board[isoi].is_pawn() {
+                return false;
             }
         }
+        let (sidel, sider) = im.get_sides();
+        let mut bpc = 0i32;
+        for iso in &(maskset.black & Mask::all_rows_above(yi) & (col.get_sides().0 | col | col.get_sides().1)).isolated_bits() {
+            let isoi = iso.as_index();
+            if board[isoi].is_b_pawn() {
+                bpc += 1;
+            }
+        }
+        if bpc > 2 {
+            return false;
+        }
+        if sidel.any() && board[sidel].is_w_pawn() {
+            bpc -= 1;
+        }
+        if sider.any() && board[sider].is_w_pawn() {
+            bpc -= 1;
+        }
+        if bpc > 0 {
+            return false;
+        }
+        if (tvals.to_mask(2) & col).any() {
+            if sidel.any() && board[sidel].is_w_pawn() {
+                return true;
+            }
+            if sider.any() && board[sider].is_w_pawn() {
+                return true;
+            }
+        }
+        return true;
+    }
+    fn compounding_weight(tvals: &ValueMask, index: usize) -> i32 {
+        if index < 8 || index > 39 { return 0 };
+        let mut im = Mask::from_index(index).get_above();
+        let tv = tvals.to_mask_ge0();
+        let mut value = 0;
+        while im.any() {
+            if (tv & im).any() {
+                break;
+            }
+            value += WEIGHT_COMPOUNDING_PASSED[8 - (im.as_index() / 8) - 4];
+            im = im.get_above();
+        }
         return value;
+    }
+    pub fn passed(board: &[u8; 64], moves: &MotionSet, maskset: &MaskSet) -> i32 {
+        let mut rank_val = 0;
+        let mut compound_val = 0;
+        let mut file_val = 0;
+        let tvals = threat_values(moves, maskset);
+        for i in 0..64 {
+            if board[i].is_w_pawn() && passed_candidate(board, maskset, &tvals, i){
+                let rank = 8 - (i / 8);
+                let file = 1 + (i % 8);
+                println!("{}", (file - 1).min(8 - file) as i32);
+                rank_val += WEIGHT_PASSED_RANK[rank - 1];
+                compound_val += WEIGHT_COMPOUNDING_MULT * compounding_weight(&tvals, i);
+                file_val += WEIGHT_PASSED_FILE * (file - 1).min(8 - file) as i32;
+            }
+        }
+        return rank_val + compound_val + file_val;
     }
 }
 mod imbalance {
     use crate::lib::{
         chessbyte::ChessByte,
-        piece::{Parity, PieceByte}
+        piece::PieceByte
     };
 
     use super::count_pieces;
@@ -828,7 +414,7 @@ mod imbalance {
     }
     pub fn piece_imbalance(board: &[u8; 64]) -> i32 {
         let mut sum = 0;
-        for (index, p) in board.iter().enumerate() {
+        for p in board.iter() {
             if p.is_piece() && p.is_white() && !p.is_king() {
                 let mut bishops = (0i32, 0i32);
                 for x in 0..8 {
@@ -866,13 +452,6 @@ mod imbalance {
     }
 
 }
-fn phase(board: &[u8; 64]) -> i32 {
-  let midlimit = 15258;
-  let endlimit = 3915;
-  let mut material = material::midgame_material(&board) + material::midgame_material(&board.flipped());
-  material = endlimit.max(material.min(midlimit));
-  return ((material - endlimit) * 128) / (midlimit - endlimit);
-}
 fn count_pieces(board: &[u8; 64], piece: PieceByte) -> i32 {
     let mut count = 0;
     for p in board.iter() {
@@ -882,62 +461,9 @@ fn count_pieces(board: &[u8; 64], piece: PieceByte) -> i32 {
     }
     return count;
 }
-fn opposite_bishops(board: &[u8; 64], flipped: &[u8; 64]) -> bool {
-    if count_pieces(board, PieceByte::BISHOP) != 1 || count_pieces(flipped, PieceByte::BISHOP) != 1 {
-        return false;
-    }
-    let mut c1 = 0;
-    let mut c2 = 0;
-    for x in 0..8 {
-        for y in 0..8 {
-            if board[y * 8 + x].get_piece() == PieceByte::BISHOP {
-                if board[y * 8 + x].is_parity(Parity::WHITE) {
-                    c1 = (x + y) % 2;
-                } else {
-                    c2 = (x + y) % 2;
-                }
-            }
-        }
-    }
-    return !(c1 == c2)
-}
-fn piece_count(board: &[u8; 64]) -> i32 {
-    let mut count = 0;
-    for i in board.iter() {
-        if i.is_parity(Parity::WHITE) {
-            count += 1;
-        }
-    }
-    return count;
-}
-fn scale_factor(board: &[u8; 64], endgame: i32) -> i32 {
-    let flipped = board.flipped();
-    let board_w = if endgame > 0 { &board } else { &flipped };
-    let board_b = if endgame > 0 { &flipped } else { &board };
-    let mut factor = 64;
-    let pawns_w = count_pieces(board_w, PieceByte::PAWN);
-    let queens_b = count_pieces(board_b, PieceByte::QUEEN);
-    let bishops_w = count_pieces(board_w, PieceByte::BISHOP);
-    let knights_b = count_pieces(board_b, PieceByte::KNIGHT);
-    let material_w = material::midgame_material(board_w);
-    let material_b = material::midgame_material(board_b);
-    if pawns_w == 0 && material_w - material_b <= 825 {
-        factor = if material_w < 1276 { 0 } else { if material_b <= 825 { 4 } else { 14 }};
-    }
-    if factor == 64 {
-        let ob = opposite_bishops(board_w, board_b);
-        if ob && material_w == 825 && material_b == 825 {
-            factor = 22;
-        } else if ob {
-            factor = 22 + 3 * piece_count(board_w);
-        }
-
-    }
-    return factor;
-}
 pub mod pieces {
     use crate::lib::{
-        boardarray::BoardArray, chessbyte::ChessByte, motion::{Motion, MotionSet}, piece::{Parity, PieceByte}
+        boardarray::BoardArray, chessbyte::ChessByte, motion::MotionSet, piece::PieceByte
     };
 
     use super::{mobility, pawn::is_backwards};
@@ -1000,20 +526,16 @@ pub mod pieces {
                     value += if board[index - 2].get_piece() == PieceByte::PAWN && board[index - 2].is_white() { 0.5 } else { 1.0 };
                 }
             }
-            if x > 0 && x + 1 <= 7 && index + 7 >= 0 {
+            if x > 0 && x + 1 <= 7 {
                 if king_ring(board, index - 7, true) {
                     value += if board[index + 2].get_piece() == PieceByte::PAWN && board[index - 2].is_white() { 0.5 } else { 1.0 };
                 }
             }
             return value;
         }
-        for (i, piece) in board.iter().enumerate() {
+        for i in 0..64 {
             if king_ring(board, i, false) {
-
                 return 1.0;
-                // if knight_attack(board, i) || bishop_xray_attack(board, i) || rook_xray_attack(board, i) || queen_attack(board, i) {
-                    // return 1.0;
-                // }
             }
         }
         return 0.0;
@@ -1143,30 +665,8 @@ pub mod pieces {
         }
         return false;
     }
-    /*
-    fn reachable_outpost(board: &[u8; 64], index: usize) -> i32 {
-        let mut value = 0;
-        for x in 0..8 {
-            for y in 2..5 {
-                let i = y * 8 + x;
-                if is_outpost(board, i) {
-                    if board[i].is_knight() && knight_reaches(board, index, i) {
-
-                    }
-                }
-                if board[i].is_knight() && board[i].is_white() {
-                    if 
-                }
-            }
-        }
-
-    }
-    */
     fn outpost(board: &[u8; 64], index: usize) -> i32 {
         if !is_outpost(board, index) {
-            // if board[index].is_knight() && reachable_outpost(board, index) != 0 {
-            //     return WEIGHT_OUTPOST[1]; 
-            // }
             return 0;
         }
         let xi = index % 8;
@@ -1339,17 +839,6 @@ pub mod pieces {
         for (index, piece) in board.iter().enumerate() {
             if piece.is_white() {
                 if piece.is_knight() {
-                    /*
-                    println!("Knight, in order: {}, {}, {}, {}, {}, {}, {}", 
-                        outpost(board, index), 
-                        mbehind_pawn(board, index), 
-                        rook_queen_file(board, index), 
-                        rook_king_ring(board, index),
-                        rook_open_file(board, index),
-                        trapped_rook(board, index, castling, moves),
-                        king_protector(board, index, true)
-                    );
-                    */
                     value += outpost(board, index);
                     value += mbehind_pawn(board, index);
                     value += rook_queen_file(board, index);
@@ -1358,19 +847,7 @@ pub mod pieces {
                     value += open_file;
                     if open_file > 0 { value += trapped_rook(board, index, castling, moves) };
                     value += king_protector(board, index, true);
-
                 } else if piece.is_bishop() {
-                    /*
-                    println!("Bishop, in order: {}, {}, {}, {}, {}, {}, {}", 
-                        outpost(board, index), 
-                        mbehind_pawn(board, index), 
-                        bishop_pawns(board, index),
-                        bishop_xray(board, index),
-                        bishop_king_ring(board, index),
-                        king_protector(board, index, false),
-                        long_diagonal_bishop(board, index)
-                    );
-                    */
                     value += outpost(board, index);
                     value += mbehind_pawn(board, index);
                     value += bishop_pawns(board, index);
@@ -1380,12 +857,6 @@ pub mod pieces {
                     value += long_diagonal_bishop(board, index);
 
                 } else if piece.is_queen() {
-                    /*
-                    println!("Queen, in order: {}, {}", 
-                        weak_queen(board, index),
-                        queen_infiltration(board, index)
-                    );
-                    */
                     value += weak_queen(board, index);
                     value += queen_infiltration(board, index);
                 }

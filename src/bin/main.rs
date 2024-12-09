@@ -1,19 +1,7 @@
-use std::cell::RefCell;
-use std::rc::Rc;
-
-use chess::lib::chessbyte::ChessByte;
-use chess::lib::eval;
-use chess::lib::heap::{EvaluatedMotion, Heap};
-use chess::lib::piece::Parity;
-use chess::lib::player::Player;
-use chess::lib::searchtree::SearchTree;
-use chess::lib::state::State;
 use chess::lib::ui::ChessApp;
-use chess::lib::mask::Mask;
-use chess::lib::piece::PieceByte;
 use eframe::egui;
 
-const FENS: [&str; 11] = [
+const FENS: [&str; 12] = [
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1", // Default
     "rnbqkbnr/8/8/8/8/8/8/RNBQKBNR w KQkq - 0 1", // No Pawns
     "r/8/8/8/8/8/8/R w KQkq - 0 1", // Just rooks,
@@ -24,7 +12,8 @@ const FENS: [&str; 11] = [
     "rnbqkbnr/ppp1pppp/8/3p4/4P3/8/PPPP1PPP/RNBQKBNR w KQkq e3 0 1",
     "rnbqkbnr/pppppppp/8/4B3/8/8/PPPPPPPP/RN1QKBNR w KQkq - 0 1",
     "rnbqkbnr/pppppppp/2Q5/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 1 1",
-    "rnbqk2Q/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1"
+    "rnbqk2Q/pppppppp/8/8/8/8/PPPPPPPP/RNB1KBNR w KQkq - 0 1",
+    "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq b6 0 2"
     
 ];
 

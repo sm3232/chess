@@ -1,6 +1,6 @@
 use super::motion::Motion;
 
-#[derive(Copy)]
+#[derive(Copy, Debug)]
 pub struct EvaluatedMotion {
     pub evaluation: i32,
     pub motion: Motion,
@@ -14,6 +14,11 @@ impl Clone for EvaluatedMotion {
             motion: self.motion,
             key: 0,
         }
+    }
+}
+impl std::fmt::Display for EvaluatedMotion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(f, "{} -> {}, ({})", self.motion.from, self.motion.to, self.evaluation);
     }
 }
 impl PartialEq for EvaluatedMotion {
@@ -61,6 +66,23 @@ impl Heap {
     
     #[inline(always)]
     pub fn right(i: usize) -> usize { (2 * i) + 2 }
+
+    pub fn to_sorted_evaluated_motions(&self) -> Vec<EvaluatedMotion> {
+        let mut heap = self.store.clone();
+        let mut v: Vec<EvaluatedMotion> = Vec::with_capacity(self.store.len());
+        while !heap.is_empty() {
+            v.push(heap.pop().unwrap());
+        }
+        return v;
+    }
+    pub fn to_sorted_motions(&self) -> Vec<Motion> {
+        let mut heap = self.store.clone();
+        let mut v: Vec<Motion> = Vec::with_capacity(self.store.len());
+        while !heap.is_empty() {
+            v.push(heap.pop().unwrap().motion);
+        }
+        return v;
+    }
 
     pub fn bubble(&mut self, mut i: usize) -> () {
         while i > 0 {

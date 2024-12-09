@@ -1,8 +1,6 @@
 pub mod draw {
     use eframe::egui::{self, Painter};
-    use crate::lib::{
-        boardarray::BoardArray, chessbyte::ChessByte, game, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point
-    };
+    use crate::lib::{ chessbyte::ChessByte, heap::EvaluatedMotion, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point };
 
     pub fn visual_weight_remap_table(piece: PieceByte) -> (i32, i32) {
         return match piece {
@@ -26,10 +24,41 @@ pub mod draw {
     pub const BOARD_W_COLOR: egui::Color32 = egui::Color32::from_rgb(WHITE_COLOR_VALUE, WHITE_COLOR_VALUE, WHITE_COLOR_VALUE);
     pub const BOARD_B_COLOR: egui::Color32 = egui::Color32::from_rgb(BLACK_COLOR_VALUE, BLACK_COLOR_VALUE, BLACK_COLOR_VALUE);
 
-    pub fn draw_board (painter: &Painter) -> f32 {
-        let sqmin = painter.clip_rect().width().min(painter.clip_rect().height());
-        let sqsize: f32 = sqmin / (BOARD_SIZE as f32);
+    
+    fn draw_arrow(painter: &egui::Painter, start: egui::Pos2, end: egui::Pos2, color: egui::Color32, thickness: f32, text: &str, taken_text: &Vec<egui::Pos2>) -> egui::Pos2 {
+        painter.line_segment([start, end], egui::Stroke::new(thickness, color));
+        let angle = std::f32::consts::PI / 6.0;
+        let arrow_length = 10.0;
 
+        let arrow_vec = start - end;
+        let arrow_vec_normalized = arrow_vec.normalized();
+
+        let head_vec1 = egui::Vec2::new(
+            arrow_vec_normalized.x * angle.cos() - arrow_vec_normalized.y * angle.sin(),
+            arrow_vec_normalized.x * angle.sin() + arrow_vec_normalized.y * angle.cos()
+        ) * arrow_length;
+
+        let head_vec2 = egui::Vec2::new(
+            arrow_vec_normalized.x * angle.cos() + arrow_vec_normalized.y * angle.sin(),
+            -arrow_vec_normalized.x * angle.sin() + arrow_vec_normalized.y * angle.cos()
+        ) * arrow_length;
+        painter.line_segment([end, end + head_vec1], egui::Stroke::new(thickness, color));
+        painter.line_segment([end, end + head_vec2], egui::Stroke::new(thickness, color));
+        let mut text_pos = end + egui::Vec2::new(10.0, -10.0);
+        if taken_text.contains(&text_pos) {
+            text_pos.y -= 50.0;
+        }
+        painter.text(
+            text_pos, 
+            egui::Align2::LEFT_BOTTOM, 
+            text, 
+            egui::FontId::proportional(14.0), 
+            color
+        );
+        return text_pos;
+    }
+
+    pub fn draw_board (painter: &Painter, sqsize: f32) -> f32 {
         for i in 0..BOARD_SIZE {
             for k in 0..BOARD_SIZE {
                 painter.rect(
@@ -48,7 +77,7 @@ pub mod draw {
         }
         return sqsize;
     }
-    pub fn draw_pieces (board: &[u8; 64], ui: &mut egui::Ui, sqsize: f32, lightly: bool) -> () {
+    pub fn draw_pieces (board: &[u8; 64], ui: &mut egui::Ui, sqsize: f32) -> () {
         for (index, &byte) in board.iter().enumerate() {
             if byte == 0 {
                 continue;
@@ -57,11 +86,7 @@ pub mod draw {
             if byte.get_parity() == Parity::WHITE { path.push_str("light/") } else { path.push_str("dark/") };
             path.push_str(&byte.get_piece().to_string().to_lowercase());
             path.push_str(".png");
-            let mut img = egui::Image::from_uri(path);
-            if lightly {
-                img = img.tint(egui::Color32::WHITE.lerp_to_gamma(egui::Color32::TRANSPARENT, 0.9));
-            }
-            img.paint_at(ui, egui::Rect {
+            egui::Image::from_uri(path).paint_at(ui, egui::Rect {
                 min: (Point::from_index(index) * sqsize).into(),
                 max: ((Point::from_index(index) + Point { x: 1, y: 1 }) * sqsize).into()
             });
@@ -73,13 +98,18 @@ pub mod draw {
             max: ((Point::from_index(u) + Point { x: 1, y: 1 }) * sqsize).into()
         };
     }
-
-    pub fn draw_debug_info(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], painter: &Painter, sqsize: f32, hover: Option<Point>) -> () {
+    pub fn highlight_selected(painter: &egui::Painter, selected: usize, sqsize: f32) -> () {
         if selected != 65 {
             painter.debug_rect(Mask::from_index(selected).to_painter_rect(sqsize), egui::Color32::GREEN, "SELECTED");
+        }
+    }
+    pub fn highlight_selected_moves(painter: &egui::Painter, selected: usize, moves: &[Vec<Motion>; 64], sqsize: f32) -> () {
+        if selected != 65 {
             let cached_moves = &moves[selected];
             for m in cached_moves.iter() { painter.debug_rect(usize_painter_rect(m.to, sqsize), egui::Color32::LIGHT_GREEN, "MOVE") };
         }
+    }
+    pub fn highlight_hover_moves(painter: &egui::Painter, hover: Option<Point>, moves: &[Vec<Motion>; 64], sqsize: f32) -> () {
         if let Some(hp) = hover {
             if hp.valid() {
                 let cached_moves = &moves[hp.to_index()];
@@ -88,17 +118,30 @@ pub mod draw {
                 }
             }
         }
-
     }
-
-    pub fn draw_all(board: &[u8; 64], selected: usize, moves: &[Vec<Motion>; 64], ui: &mut egui::Ui, bg_painter: &Painter, dbg_painter: &Painter, hover: Option<Point>, lightly: bool) -> () {
-        let sqsize = draw_board(bg_painter);
-        draw_pieces(board, ui, sqsize, lightly);
-        if !lightly {
-            draw_debug_info(board, selected, moves, dbg_painter, sqsize, hover);
+    pub fn highlight_mtm(painter: &egui::Painter, mtm: &Motion, sqsize: f32) -> (){
+        if mtm.from != 65 && mtm.to != 65 {
+            painter.debug_rect(Mask::from_index(mtm.from).to_painter_rect(sqsize), egui::Color32::BLUE, "FROM");
+            painter.debug_rect(Mask::from_index(mtm.to).to_painter_rect(sqsize), egui::Color32::BLUE, "TO");
         }
     }
-
+    pub fn highlight_considerations(painter: &egui::Painter, considerations: Option<&Vec<EvaluatedMotion>>, sqsize: f32) -> () {
+        if let Some(consider) = considerations {
+            let offset = egui::Vec2{ x: sqsize / 2.0, y: sqsize / 2.0 };
+            let mut taken_text_pos: Vec<egui::Pos2> = Vec::new();
+            let mut mine = i32::MIN;
+            let mut maxe = i32::MAX;
+            for c in consider {
+                mine = mine.min(c.evaluation);
+                maxe = maxe.max(c.evaluation);
+            }
+            for c in consider {
+                let from: egui::Pos2 = Point::from_index(c.motion.from).into();
+                let to: egui::Pos2 = Point::from_index(c.motion.to).into();
+                taken_text_pos.push(draw_arrow(painter, (from * sqsize) + offset, (to * sqsize) + offset, egui::Color32::from_rgba_unmultiplied(0, 255, 0, 10), 1.0, &c.evaluation.to_string(), &taken_text_pos));
+            }
+        }
+    }
 }
 
 
@@ -108,31 +151,13 @@ pub mod pretty_print {
     use stanza::renderer::console::{Console, Decor};
     use stanza::renderer::Renderer;
     use stanza::style::{ HAlign, Header, MaxWidth, MinWidth, Styles};
-    use stanza::table::{ Cell, Col, Content, Row, Table};
+    use stanza::table::{ Col, Row, Table};
     use crate::lib::chessbyte::ChessByte;
-    use crate::lib::eval::{EvaluationTerm, Evaluator};
+    use crate::lib::eval::Evaluator;
     use crate::lib::mask::{DepthMask, Mask, ValueMask};
     use crate::lib::maskset::MaskSet;
     use crate::lib::motion::Motion;
 
-    #[allow(dead_code)]
-    /*
-    fn piece_to_table(p: Rc<RefCell<Box<dyn TPiece>>>) -> stanza::table::Table {
-        return Table::with_styles(
-            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
-        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
-            let x = p.borrow().get_props().pos.x;
-            let y = p.borrow().get_props().pos.y;
-            let mut v = vec!['0'; 7];
-            if i == y {
-                v.insert(x as usize, '1');
-            } else {
-                v.push('0');
-            }
-            return Row::from(v);
-        })).into();
-    }
-    */
     pub fn maskset_to_table(title: &str, maskset: &MaskSet) -> Table {
         return table_with_title(title, 
             Table::with_styles(Styles::default()).with_cols(vec![
@@ -270,52 +295,14 @@ pub mod pretty_print {
         })
         ).with_row(Row::new(Styles::default().with(Header(true)), vec!["Total".into(), wt.to_string().into(), bt.to_string().into(), (wt + bt).to_string().into()]))
     } 
-    /*
-       #[allow(dead_code)]
-       fn info_to_rows(p: Rc<RefCell<Box<dyn TPiece>>>, piece_m: &Mask, o: Rc<RefCell<Box<dyn TPiece>>>, other_m: &Mask) -> Vec<Row>{
-       return vec![
-       Row::new(
-       Styles::default(),
-       vec![
-       p.borrow().into(),
-       piece_m.to_point_or_00().into(),
-       o.borrow().into(),
-       other_m.to_point_or_00().into(),
-       ]
-       ),
-       Row::new(
-       Styles::default(),
-       vec![
-       piece_to_table(p).into(),
-       mask_to_table(piece_m).into(),
-       piece_to_table(o).into(),
-       mask_to_table(other_m).into()
-       ]
-       )
-       ];
-       }
-    /*
-    pub fn pretty_print_future(using: Rc<RefCell<Box<dyn TPiece>>>, usings_move: &Mask, other_piece: Rc<RefCell<Box<dyn TPiece>>>, others_moves: &Mask){ 
-    let frame = Table::with_styles(
-    Styles::default()
-    ).with_cols(vec![
-    Col::default(),
-    Col::default()
-    ]).with_row(Row::from(["This piece", "Can move to", "Which gives this piece", "These moves"])).with_rows(
-    info_to_rows(using, usings_move, other_piece, others_moves)
-    );
-    println!("{}", Console::default().render(&frame));
-    }*/
-    */
-
-        pub fn pretty_string_evaluator(evaluator: &Evaluator) -> String {
-            let renderer = Console({
-                let mut decor = Decor::default();
-                decor.draw_outer_border = false;
-                decor
-            });
-            return format!("{}", renderer.render(&eval_to_table(evaluator)));
-        }
+    pub fn pretty_string_evaluator(evaluator: &Evaluator) -> String {
+        let renderer = Console({
+            let mut decor = Decor::default();
+            decor.draw_outer_border = false;
+            decor
+        });
+        return format!("{}", renderer.render(&eval_to_table(evaluator)));
+    }
     pub fn pretty_print_value_mask(title: &str, mask: &ValueMask) -> () {
         println!("{}", Console::default().render(&value_mask_to_table(title, &mask)));
     }

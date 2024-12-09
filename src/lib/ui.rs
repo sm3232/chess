@@ -1,28 +1,22 @@
 
-use std::ops::Deref;
-use std::{rc::Rc, sync::Mutex};
 use std::thread;
-use std::time::Duration;
 
 use crate::lib::{
-    cutil::draw::{usize_painter_rect, visual_weight_remap_table, MID_COLOR_VALUE},
+    cutil::draw::{visual_weight_remap_table, MID_COLOR_VALUE},
     cutil::draw,
     cutil::pretty_print::pretty_string_evaluator,
-    eval::{self, Evaluator},
     eval::material::get_visual_material_weights,
     piece::PieceByte,
-    searchtree::{SearchTree, ROOT_C, ROOT_S},
+    searchtree::SearchTree,
     point::Point,
     chessbyte::ChessByte,
     piece::Parity,
-    player::Player,
-    game::ChessGame,
     manager::Manager
 };
 
-use std::sync::{mpsc, Arc};
-use eframe::egui::{self, Color32, Painter, RequestRepaintInfo};
+use eframe::egui::{self, Color32, Painter};
 
+use super::cutil::draw::BOARD_SIZE;
 use super::manager::{SharedState, VisualInfo};
 pub struct ChessApp {
     pub receiver: crossbeam_channel::Receiver<SharedState>,
@@ -129,21 +123,23 @@ impl eframe::App for ChessApp {
     }
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.saved.waiting_for_a_human_input = Some(false);
-        let recvv: Vec<_> = self.receiver.try_iter().collect();
-        for recvd in recvv {
+        let recvv = self.receiver.try_iter().last();
+        if let Some(recvd) = &recvv {
             if recvd.board.is_some() { self.saved.board = recvd.board };
             if recvd.turn.is_some() { self.saved.turn = recvd.turn };
             if recvd.waiting_for_a_human_input.is_some() { self.saved.waiting_for_a_human_input = recvd.waiting_for_a_human_input };
-            if recvd.moves.is_some() { self.saved.moves = recvd.moves };
+            if recvd.moves.is_some() { self.saved.moves = recvd.moves.clone() };
             if recvd.allowed_castles.is_some() { self.saved.allowed_castles = recvd.allowed_castles };
             if recvd.working.is_some() { self.saved.working = recvd.working };
             if recvd.game_over.is_some() { self.saved.game_over = recvd.game_over };
             if recvd.selected.is_some() { self.saved.selected = recvd.selected };
-            if recvd.visuals.visual_weights.is_some() { self.saved.visuals.visual_weights = recvd.visuals.visual_weights }
-            if recvd.visuals.cache_saves.is_some() { self.saved.visuals.cache_saves = recvd.visuals.cache_saves }
-            if recvd.visuals.analyzed.is_some() { self.saved.visuals.analyzed = recvd.visuals.analyzed }
-            if recvd.visuals.evaluation.is_some() { self.saved.visuals.evaluation = recvd.visuals.evaluation }
-            if recvd.visuals.tree.is_some() { self.saved.visuals.tree = recvd.visuals.tree }
+            if recvd.visuals.visual_weights.is_some() { self.saved.visuals.visual_weights = recvd.visuals.visual_weights };
+            if recvd.visuals.cache_saves.is_some() { self.saved.visuals.cache_saves = recvd.visuals.cache_saves };
+            if recvd.visuals.analyzed.is_some() { self.saved.visuals.analyzed = recvd.visuals.analyzed };
+            if recvd.visuals.evaluation.is_some() { self.saved.visuals.evaluation = recvd.visuals.evaluation.clone() };
+            if recvd.visuals.tree.is_some() { self.saved.visuals.tree = recvd.visuals.tree.clone() };
+            if recvd.visuals.mtm.is_some() { self.saved.visuals.mtm = recvd.visuals.mtm };
+            if recvd.visuals.considerations.is_some() { self.saved.visuals.considerations = recvd.visuals.considerations.clone() };
         }
 
 
@@ -168,7 +164,17 @@ impl eframe::App for ChessApp {
                         game_ui.with_layer_id(egui::LayerId::new(egui::Order::Middle, egui::Id::new("fg")), |uui| {
                             let dbg_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Debug, egui::Id::new("dbg_painter")), self.game_rect);
                             let bg_painter = Painter::new(ctx.clone(), egui::LayerId::new(egui::Order::Background, egui::Id::new("bg_painter")), self.game_rect);
-                            draw::draw_all(&self.saved.board.unwrap(), self.saved.selected.unwrap(), &self.saved.moves.as_ref().unwrap(), uui, &bg_painter, &dbg_painter, input.pos, false);
+                            let sqmin = bg_painter.clip_rect().width().min(bg_painter.clip_rect().height());
+                            let sqsize: f32 = sqmin / (BOARD_SIZE as f32);
+                            draw::draw_board(&bg_painter, sqsize);
+                            draw::draw_pieces(&self.saved.board.unwrap(), uui, sqsize);
+                            draw::highlight_selected(&dbg_painter, self.saved.selected.unwrap(), sqsize);
+                            draw::highlight_selected_moves(&dbg_painter, self.saved.selected.unwrap(), self.saved.moves.as_ref().unwrap(), sqsize);
+                            draw::highlight_hover_moves(&dbg_painter, input.pos, self.saved.moves.as_ref().unwrap(), sqsize);
+                            // draw::highlight_mtm(&dbg_painter, &self.saved.visuals.mtm.unwrap_or_default(), sqsize);
+                            if self.saved.working.is_some_and(|x| x) {
+                                draw::highlight_considerations(&dbg_painter, self.saved.visuals.considerations.as_ref(), sqsize);
+                            }
                         });
 
                         if self.saved.game_over.unwrap() {
@@ -243,21 +249,6 @@ impl eframe::App for ChessApp {
                     if let Some(tree) = &mut self.saved.visuals.tree {
                         SearchTree::display(tree, ui, &tree_painter);
                     }
-
-                    /*
-                    if let Some(vis) = &self.saved.visuals {
-                        if let Some(tree) = &vis.tree {
-                            // SearchTree::display(tree, ui, &tree_painter);
-                        }
-                    }*/
-                    /*
-                    if self.saved.working.unwrap() {
-
-                        SearchTree::display(state.visuals.tree.as_ref().unwrap(), ui, &tree_painter);
-                    } else if self.last_visual_state.tree.is_some() {
-                        SearchTree::display(self.last_visual_state.tree.as_ref().unwrap(), ui, &tree_painter);
-                    }
-                    */
                 });
 
             });

@@ -1,4 +1,3 @@
-
 use crate::lib::{
     chessbyte::ChessByte, 
     mask::Mask, 
@@ -15,10 +14,7 @@ use crate::lib::{
     player::Player
 
 };
-use std::{cell::RefCell, sync::{Arc, Mutex}};
-use std::rc::Rc;
-
-
+use std::sync::{Arc, Mutex};
 
 pub struct ChessGame {
     pub selected: usize,
@@ -119,41 +115,6 @@ impl ChessGame {
         drop(locked);
         return cg;
     }
-
-    /*
-    pub fn request_move(&mut self, from: &Mask, to: &Mask) {
-        let from_index = from.as_index();
-        let from_piece = self.state.borrow().get_piece_at_index(from_index);
-        if from_piece != 0 {
-            // let result = self.state.borrow_mut().try_accept(from_index, to_index);
-            // if result != usize::MAX {
-                // self.state_history.push(self.state.borrow_mut().purge(result));
-                // std::mem::swap(self.state_history.last_mut().unwrap(), &mut self.state);
-                // self.state.borrow_mut().accept();
-            // }
-        }
-    }
-    */
-    /*
-    pub fn poll_players(&mut self) -> bool {
-        let option_player = if self.state.borrow().turn == Parity::WHITE { &self.players.0 } else { &self.players.1 };
-        if let Some(player) = option_player {
-            let optional_tree = player.your_turn(self.state.clone());
-            self.tree = optional_tree;
-            // let pm = &player.your_turn());
-            if !self.paused {
-                // let result = self.state.borrow_mut().try_accept_via_board(&pm);
-                // if result != usize::MAX {
-                    // self.state_history.push(self.state.borrow_mut().purge(result));
-                    // std::mem::swap(self.state_history.last_mut().unwrap(), &mut self.state);
-                    // self.state.borrow_mut().accept();
-                // }
-            }
-            return true;
-        }
-        return false;
-    }
-    */
     pub fn register_players(&mut self, p1: Option<Arc<Mutex<dyn Player>>>, p2: Option<Arc<Mutex<dyn Player>>>) -> () {
         self.players.0 = p1;
         self.players.1 = p2;
@@ -188,21 +149,6 @@ impl ChessGame {
                     }
                 }
 
-                    /*
-                    let result = self.state.borrow_mut().try_accept(self.selected, pos_index);
-                    if result != usize::MAX {
-                        self.selected = 65;
-                        self.state_history.push(self.state.borrow_mut().purge(result));
-                        std::mem::swap(self.state_history.last_mut().unwrap(), &mut self.state);
-                        self.state.borrow_mut().accept();
-                    } else {
-                        if piece_at_input.get_parity() == self.state.borrow().turn {
-                            self.selected = pos_index;
-                        } else if piece_at_input == 0 {
-                            self.selected = 65;
-                        }
-                    }
-                    */
             } else {
                 if piece_at_input != 0 {
                     if piece_at_input.get_parity() == locked.turn {
@@ -213,6 +159,5 @@ impl ChessGame {
                 }
             }
         }
-        drop(locked);
     }
 }

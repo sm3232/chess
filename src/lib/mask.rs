@@ -178,6 +178,22 @@ impl Mask {
                 self.raw.unbounded_shr(6) 
         };
     }
+    pub fn get_above(&self) -> Mask {
+        let i = self.raw.leading_zeros();
+        if i < 8 {
+            return Mask::default();
+        }
+        return Mask { raw: self.raw << 8 };
+    }
+    pub fn get_sides(&self) -> (Mask, Mask) {
+        let i = self.raw.leading_zeros() % 8;
+        if i == 0 {
+            return (Mask::default(), Mask { raw: self.raw.unbounded_shr(1) } );
+        } else if i == 7 {
+            return (Mask { raw: self.raw.unbounded_shl(1) }, Mask::default() );
+        }
+        return (Mask { raw: self.raw.unbounded_shl(1) }, Mask { raw: self.raw.unbounded_shr(1) } );
+    }
     pub fn to_point_vector(&self) -> Vec<Point> {
         let bv = &mut self.raw.to_ne_bytes();
         let mut v: Vec<Point> = Vec::new();

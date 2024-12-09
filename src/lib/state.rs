@@ -1,13 +1,11 @@
-use std::sync::Mutex;
-use std::{cell::RefCell, sync::Arc};
-use std::rc::Rc;
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 
 use crate::lib::cutil::pretty_print::pretty_print_masks;
 use crate::lib::{
-    cutil::pretty_print::{pretty_print_board, pretty_print_mask, pretty_print_moveset},
-    boardarray::BoardArray, chessbyte::ChessByte, mask::Mask, maskset::MaskSet, piece::{ 
-        Parity, PieceByte
-    }, zobrist::Zobrist,
+    cutil::pretty_print::pretty_print_board,
+    boardarray::BoardArray, chessbyte::ChessByte, mask::Mask, maskset::MaskSet, piece::Parity,
+    zobrist::Zobrist,
     motion::Motion
 };
 
@@ -59,6 +57,7 @@ pub struct PartialState {
 
 pub struct State {
     pub board: [u8; 64],
+    pub cached_moves: HashMap<u64, MotionSet>,
     pub moves: MotionSet,
     pub turn: Parity,
     pub zobrist: Arc<Mutex<Zobrist>>,
@@ -82,7 +81,8 @@ impl Default for State {
             info: RetainedStateInfo::default(),
             held_boards: Vec::new(),
             num_analyzed: 0,
-            num_cached: 0
+            num_cached: 0,
+            cached_moves: HashMap::default()
         }
     }
 }
@@ -123,6 +123,14 @@ impl State {
         }
         panic!("No held state when expected!");
     }
+    pub fn set_sorted_motions(&mut self, sorted: Vec<Motion>) -> () {
+        if self.turn == Parity::WHITE {
+            self.moves.white_vect = sorted;
+        } else {
+            self.moves.black_vect = sorted;
+        }
+        self.cached_moves.insert(self.info.zkey, self.moves.clone());
+    }
     pub fn get_king(&self, parity: Parity) -> usize {
         return self.info.king_indices[if parity == Parity::WHITE { 0 } else { 1 }];
     }
@@ -146,21 +154,6 @@ impl State {
         drop(zrist);
         self.hydrate(true);
     }
-    /*
-    pub fn threatened_by_enemy(&self, mask: &Mask, turn: Parity) -> bool {
-        return (*mask & self.board.get_moves_shallow_ipd(turn, &self.info.maskset, &self.info.enpassant_mask)).any();
-    }
-    pub fn king_in_check(&self, kp: Parity) -> bool {
-        let mut kpi = 65;
-        for i in 0..64 {
-            if self.board[i].get_parity() == kp && self.board[i].is_king() {
-                kpi = i;
-                break;
-            }
-        }
-        return kpi == 65 || (Mask::from_index(kpi) & self.board.get_moves_shallow_ipd(!kp, &self.info.maskset, &self.info.enpassant_mask)).any();
-    }
-    */
     pub fn partial_flipped(&self) -> PartialState {
         let flip = self.board.flipped();
         return PartialState {
@@ -180,7 +173,12 @@ impl State {
             pretty_print_board("Hydrating board", &self.board);
             pretty_print_maskset("Maskset", &self.info.maskset);
         }
-        self.moves = self.board.get_motions(&self.info.maskset, &self.info.enpassant_mask, Some(self.info.allowed_castles));
+        if let Some(cached) = self.cached_moves.get(&self.info.zkey) {
+            self.moves = cached.clone();
+        } else {
+            self.moves = self.board.get_motions(&self.info.maskset, &self.info.enpassant_mask, Some(self.info.allowed_castles));
+            self.cached_moves.insert(self.info.zkey, self.moves.clone());
+        }
         if debug_log {
             pretty_print_masks("Flat moves", &vec![("White", &self.moves.white_flat), ("Black", &self.moves.black_flat)]);
         }
@@ -188,44 +186,4 @@ impl State {
         zrist.save((self.info.clone(), self.moves.clone(), None));
         drop(zrist);
     }
-    /*
-    pub fn hydrate(&mut self){
-        self.moves = self.board.get_moves(self.turn, &self.info.maskset, &self.info.enpassant_mask);
-        let myking = self.info.king_indices[if self.turn == Parity::WHITE { 0 } else { 1 }];
-        if myking == 65 {
-            self.moves = [ARRAY_REPEAT_VALUE; 64];
-            return;
-        }
-
-        let kingmoves = &self.moves[myking];
-        if !kingmoves.is_empty() {
-            let parity_castles = self.info.allowed_castles & if myking == 60 { 0b0000_1100 } else { 0b0000_0011 };
-            if parity_castles & 0b0000_0101 != 0 && myking + 2 < 64 {
-                let mask = Mask::from_index(myking + 1) | Mask::from_index(myking + 2);
-                if (mask & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask), !self.turn) {
-                    self.moves[myking].push(Motion { from: myking, to: if myking == 4 { 7 } else { 63 } });
-                }
-            }
-            if parity_castles & 0b0000_1010 != 0 && myking > 2 {
-                let mask = Mask::from_index(myking - 1) | Mask::from_index(myking - 2);
-                if ((mask | Mask::from_index(myking - 3)) & self.info.maskset.all).none() && !self.threatened_by_enemy(&(Mask::from_index(myking) | mask), !self.turn) {
-                    self.moves[myking].push(Motion { from: myking, to: if myking == 4 { 0 } else { 56 } });
-                }
-            }
-        }
-
-        for i in 0..64 {
-            if self.moves[i].is_empty() { continue };
-            self.moves[i].retain(|m| {
-                let held = self.board.make(m.from, m.to, self.zobrist.clone(), &mut self.info, false);
-                let was_in_check = self.board.index_in_check(self.info.king_indices[if self.turn == Parity::WHITE { 0 } else { 1 }], self.turn, &self.info);
-                self.board.unmake(&held.0, &held.1, &mut self.info);
-                return !was_in_check;
-            });
-        }
-        let mut zrist = self.zobrist.lock().unwrap();
-        zrist.save((self.info.clone(), self.moves.clone(), None));
-        drop(zrist);
-    }
-    */
 }

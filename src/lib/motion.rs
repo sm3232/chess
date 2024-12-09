@@ -15,6 +15,11 @@ impl std::fmt::Debug for Motion {
         return write!(f, "Motion from {}, `to {}", self.from, self.to);
     }
 }
+impl std::fmt::Display for Motion {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        return write!(f, "{} -> {}", self.from, self.to);
+    }
+}
 
 #[derive(Clone)]
 pub struct MotionSet {
