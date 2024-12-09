@@ -365,7 +365,6 @@ mod general {
             if board[i].is_w_pawn() && passed_candidate(board, maskset, &tvals, i){
                 let rank = 8 - (i / 8);
                 let file = 1 + (i % 8);
-                println!("{}", (file - 1).min(8 - file) as i32);
                 rank_val += WEIGHT_PASSED_RANK[rank - 1];
                 compound_val += WEIGHT_COMPOUNDING_MULT * compounding_weight(&tvals, i);
                 file_val += WEIGHT_PASSED_FILE * (file - 1).min(8 - file) as i32;

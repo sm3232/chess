@@ -156,9 +156,7 @@ impl Searcher {
             // the value and move on
             let eval_static = scalar * eval::start_eval(&lock).eval;
             let margin = 120 * depth as i32;
-            println!("Static: {eval_static}, Margin: {margin}");
             if eval_static - margin >= beta {
-                println!("eval_static - margin >= beta ({eval_static} - {margin} >= {beta})");
                 drop(lock);
                 return eval_static - margin;
             }

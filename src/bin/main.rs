@@ -20,8 +20,6 @@ const FENS: [&str; 12] = [
 const WINDOW_SIZE: [f32; 2] = [1800.0, 600.0];
 const PLAYING_AREA: f32 = 600.0;
 
-
-
 fn main() -> () {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW_SIZE).with_position([0.0, 0.0]),

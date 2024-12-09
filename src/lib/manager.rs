@@ -1,6 +1,6 @@
 
 use eframe::egui;
-use std::{collections::{HashMap, HashSet}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
+use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
 use std::thread;
 use crate::lib::{
     eval::{self, Evaluator}, 
@@ -68,6 +68,8 @@ pub struct Manager {
     working_channel_recv: Option<crossbeam_channel::Receiver<SearchCheckIn>>,
     frame: egui::Context,
     worker: Option<JoinHandle<bool>>,
+    last_worker_notice: Option<SearchCheckIn>,
+    stable_board: [u8; 64]
 }
 
 pub struct ManagerPlayer { parity: Parity, searcher: Searcher }
@@ -109,18 +111,6 @@ impl Player for ManagerPlayer {
         self.searcher.echo.insert(locked.info.zkey);
         drop(locked);
         return true;
-        /*
-        if self.searcher.heap.empty() {
-            println!("No move! Conceding");
-            return false;
-        } else {
-            let mut locked = state.lock().unwrap();
-            println!("Max heap: {}, Motion: {} -> {}", self.searcher.heap.peek().evaluation, self.searcher.heap.peek().motion.from, self.searcher.heap.peek().motion.to);
-            locked.make_motion(&self.searcher.heap.pop().motion, true);
-            drop(locked);
-            return true;
-        }
-        */
     }
 }
 
@@ -142,6 +132,8 @@ impl Manager {
             receiver,
             worker: None,
             working_channel_recv: None,
+            last_worker_notice: None,
+            stable_board: [0u8; 64]
         };
         mgr.game.register_players(None, Some(Arc::new(Mutex::new(ManagerPlayer::new(Parity::BLACK)))));
         let tmplock = mgr.game.state.lock().unwrap();
@@ -156,6 +148,12 @@ impl Manager {
         drop(loc);
         loop {
             let tmplock = self.game.state.lock().unwrap();
+            if self.worker.is_none() && tmplock.turn == Parity::WHITE && tmplock.moves.white_vect.is_empty() {
+                self.game.game_over = true;
+            }
+            if self.worker.is_none() && tmplock.turn == Parity::BLACK && tmplock.moves.black_vect.is_empty() {
+                self.game.game_over = true;
+            }
             if tmplock.turn != last_turn && self.worker.is_none() {
                 stale_eval = true;
                 last_turn = tmplock.turn;
@@ -191,7 +189,7 @@ impl Manager {
                     let recvv = comms.try_iter().last();
                     if let Some(last) = recvv {
                         let _ = self.sender.send(SharedState {
-                            board: None,
+                            board: Some(self.stable_board),
                             turn: None,
                             waiting_for_a_human_input: Some(false),
                             moves: None,
@@ -209,6 +207,7 @@ impl Manager {
                                 &last.considerations
                             )
                         });
+                        self.last_worker_notice = Some(last);
                     }
                 }
                 self.frame.request_repaint();
@@ -217,6 +216,15 @@ impl Manager {
                 if let Some(w) = self.worker.take() {
                     if !w.join().unwrap_or(false) {
                         self.game.game_over = true;
+                    }
+                    if let Some(last) = &self.last_worker_notice {
+                        let mut file = OpenOptions::new()
+                            .write(true)
+                            .append(true)
+                            .create(true)
+                            .open(format!("{}.txt", last_turn))
+                            .unwrap();
+                        writeln!(file, "{}", last.positions_looked_at).unwrap();
                     }
                 }
                 self.worker = None;
@@ -264,6 +272,8 @@ impl Manager {
                 if self.worker.is_none() {
                     let option_player = if locked.turn == Parity::WHITE { &self.game.players.0 } else { &self.game.players.1 };
                     if let Some(p) = option_player {
+                        self.stable_board = locked.board;
+
                         let data = Arc::clone(&self.game.state);
                         
                         let player = Arc::clone(p);
