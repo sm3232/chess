@@ -1,7 +1,7 @@
 
 use eframe::egui;
-use voxell_rng::{prelude::RngCore, slice_methods::SelectRandom};
-use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
+use voxell_rng::slice_methods::SelectRandom;
+use std::{collections::{HashMap, HashSet}, fs::OpenOptions, io::{Read, Write}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
 use std::thread;
 use crate::lib::{
     eval::{self, Evaluator}, 
@@ -12,7 +12,7 @@ use crate::lib::{
     searchtree::SearchTree
 };
 
-use super::{cutil::{draw::remap_cha, pretty_print::{pretty_print_mask, pretty_print_masks}}, heap::EvaluatedMotion, mask::Mask, motion::Motion, searcher::{SearchCheckIn, SearchDriver}, state::State, ui::Input};
+use super::{heap::EvaluatedMotion, motion::Motion, searcher::{SearchCheckIn, SearchDriver}, state::State, ui::Input};
 pub struct VisualInfo {
     pub visual_weights: Option<[i32; 64]>,
     pub cache_saves: Option<usize>,

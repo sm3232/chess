@@ -1,15 +1,12 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use crate::lib::cutil::pretty_print::pretty_print_masks;
 use crate::lib::{
-    cutil::pretty_print::pretty_print_board,
     boardarray::BoardArray, chessbyte::ChessByte, mask::Mask, maskset::MaskSet, piece::Parity,
     zobrist::Zobrist,
     motion::Motion
 };
 
-use super::cutil::pretty_print::pretty_print_maskset;
 use super::motion::MotionSet;
 use super::searchtree::SearchTree;
 
