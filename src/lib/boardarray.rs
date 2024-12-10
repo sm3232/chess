@@ -215,6 +215,7 @@ pub trait BoardArray {
     fn get_kings(&self) -> [usize; 2];
 }
 impl BoardArray for [u8; 64] {
+    #[cfg(not(feature = "use_asm"))]
     fn get_kings(&self) -> [usize; 2] {
         let mut kings = [65usize; 2];
         for i in 0..64 {
@@ -226,6 +227,60 @@ impl BoardArray for [u8; 64] {
         }
         return kings;
     }
+    #[cfg(feature = "use_asm")]
+    fn get_kings(&self) -> [usize; 2] {
+        use std::arch::asm;
+        let mut array = [65usize; 2];
+        unsafe {
+            asm!(
+                "mov rcx, 64",
+                // Start of loop
+                "5:",
+                
+                // Check for 0b0000_1101
+                "movzx r8, byte ptr [rax]",
+                "and r8b, 0x0F",   // Mask lower 4 bits
+                "cmp r8b, 0x0D",   // Compare with 0b0000_1101
+                "je 2f",           // Jump if equal (first condition)
+                
+                // Check for 0b0000_0101
+                "movzx r8, byte ptr [rax]",
+                "and r8b, 0x0F",   // Mask lower 4 bits
+                "cmp r8b, 0x05",   // Compare with 0b0000_0101
+                "je 3f",           // Jump if equal (second condition)
+                
+                // Continue loop
+                "4:",
+                "inc rax",         // Move to next byte
+                "loop 5b",
+                "jmp 6f",          // Continue loop if not zero
+                
+                // Found first match (0b0000_1101)
+                "2:",
+                "mov r9, rcx",
+                "jmp 4b",          // Continue loop
+                
+                // Found second match (0b0000_0101)
+                "3:",
+                "mov r10, rcx",
+                "jmp 4b",          // Continue loop
+                
+                // Store results
+                "6:",
+                "mov [rsi], r9",   // Store first index
+                "mov [rsi+8], r10", // Store second index
+            
+                in("rax") self.as_ptr(),
+                in("rsi") array.as_mut_ptr(),
+                lateout("rax") _,
+                lateout("rcx") _,
+                lateout("rsi") _,
+                options(nostack)
+            );
+            return array;
+        }
+    }
+
     fn index_in_check(&self, index: usize, ip: Parity, info: &RetainedStateInfo) -> bool {
         return (Mask::from_index(index) & self.get_specific_motions(!ip, &info.maskset, &info.enpassant_mask)).any();
     }

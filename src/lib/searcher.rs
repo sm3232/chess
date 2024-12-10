@@ -294,12 +294,12 @@ impl Searcher {
         let mask = Mask::from_index(m.to);
         if state.board[m.from].is_white() {
             let dgs = mask.get_diags_above();
-            if state.board[dgs.0].is_b_pawn() || state.board[dgs.1].is_b_pawn() {
+            if (dgs.0.any() && state.board[dgs.0].is_b_pawn()) || (dgs.1.any() && state.board[dgs.1].is_b_pawn()) {
                 return true;
             }
         } else {
             let dgs = mask.get_diags_below();
-            if state.board[dgs.0].is_w_pawn() || state.board[dgs.1].is_w_pawn() {
+            if (dgs.0.any() && state.board[dgs.0].is_w_pawn()) || (dgs.1.any() && state.board[dgs.1].is_w_pawn()) {
                 return true;
             }
         }

@@ -1,3 +1,5 @@
+use std::{panic, process::{self, Command}, thread};
+
 use chess::lib::ui::ChessApp;
 use eframe::egui;
 
@@ -21,6 +23,11 @@ const WINDOW_SIZE: [f32; 2] = [1800.0, 600.0];
 const PLAYING_AREA: f32 = 600.0;
 
 fn main() -> () {
+    let oh = panic::take_hook();
+    panic::set_hook(Box::new(move |panic_info| {
+        oh(panic_info);
+        process::exit(1);
+    }));
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size(WINDOW_SIZE).with_position([0.0, 0.0]),
         ..Default::default()
@@ -44,4 +51,5 @@ fn main() -> () {
     } else {
         dbg!("Shut down gracefully");
     }
+    process::exit(0);
 }

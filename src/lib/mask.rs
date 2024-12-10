@@ -2,42 +2,7 @@ use stanza::renderer::{console::Console, Renderer};
 
 use crate::lib::point::Point;
 
-use super::cutil::pretty_print::{depth_mask_to_table, mask_to_table, value_mask_to_table};
-
-#[derive(Clone,Copy)]
-pub struct DepthMask {
-    pub raw: u128
-}
-impl DepthMask {
-    pub fn column(index: usize, value: usize) -> Self {
-        let mut array = [0u8; 16];
-        let bit = 0b0000_0001u8 << index;
-        for i in 0..(if value > 1 { 16 } else { 8 }) {
-            array[i] |= bit;
-        }
-        return DepthMask { raw: u128::from_ne_bytes(array) };
-    }
-    pub fn sub(&self, other: &Self) -> [i8; 64] {
-        let mut array = [0i8; 64];
-        let bv = &self.raw.to_ne_bytes();
-        for i in 0..16 {
-            for bit in 0..8 {
-                if bv[i] & (1 << bit) != 0 {
-                    array[(i % 8) * 8 + bit] += 1;
-                }
-            }
-        }
-        let bv2 = &other.raw.to_ne_bytes();
-        for i in 0..16 {
-            for bit in 0..8 {
-                if bv2[i] & (1 << bit) != 0 {
-                    array[(i % 8) * 8 + bit] -= 1;
-                }
-            }
-        }
-        return array;
-    }
-}
+use super::cutil::pretty_print::{mask_to_table, value_mask_to_table};
 
 #[derive(Clone, Copy)]
 pub struct ValueMask {
@@ -133,14 +98,6 @@ impl std::fmt::Display for ValueMask {
     }
 }
 
-
-impl std::fmt::Debug for DepthMask {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        return write!(f, "\n{}", Console::default().render(&depth_mask_to_table(self)));
-    }
-}
-
-
 #[derive(Clone,Copy)]
 pub struct Mask {
     pub raw: u64
@@ -156,15 +113,26 @@ impl Default for Mask {
     fn default() -> Self { Self { raw: 0u64 } }
 }
 
-#[allow(dead_code)]
 impl Mask {
     #[inline]
     pub fn zz() -> Mask { Mask { raw: 0b0000000000000000000000000000000000000000000000000000000000000001u64 } }
     pub fn get_diags_above(&self) -> (Mask, Mask) {
-        return (Mask { raw: self.raw.unbounded_shl(9) }, Mask { raw: self.raw.unbounded_shl(7) });
+        let i = self.raw.leading_zeros() % 8;
+        if i == 0 {
+            return (Mask::default(), Mask { raw: self.raw.unbounded_shl(7) } );
+        } else if i == 7 {
+            return (Mask { raw: self.raw.unbounded_shl(9) }, Mask::default() );
+        }
+        return (Mask { raw: self.raw.unbounded_shl(7) }, Mask { raw: self.raw.unbounded_shl(9) } );
     }
     pub fn get_diags_below(&self) -> (Mask, Mask) {
-        return (Mask { raw: self.raw.unbounded_shr(7) }, Mask { raw: self.raw.unbounded_shr(9) });
+        let i = self.raw.leading_zeros() % 8;
+        if i == 0 {
+            return (Mask::default(), Mask { raw: self.raw.unbounded_shr(7) } );
+        } else if i == 7 {
+            return (Mask { raw: self.raw.unbounded_shr(9) }, Mask::default() );
+        }
+        return (Mask { raw: self.raw.unbounded_shr(7) }, Mask { raw: self.raw.unbounded_shr(9) } );
     }
     pub fn get_knightish(&self) -> Mask {
         return Mask { 
@@ -178,12 +146,26 @@ impl Mask {
                 self.raw.unbounded_shr(6) 
         };
     }
+    #[cfg(not(feature = "use_asm"))]
     pub fn get_above(&self) -> Mask {
         let i = self.raw.leading_zeros();
         if i < 8 {
             return Mask::default();
         }
         return Mask { raw: self.raw << 8 };
+    }
+    #[cfg(feature = "use_asm")]
+    pub fn get_above(&self) -> Mask {
+        use std::arch::asm;
+        let mut o;
+        unsafe {
+            asm!(
+                "shl rax, 8",
+                in("rax") self.raw,
+                lateout("rax") o
+            );
+        }
+        return Mask { raw: o };
     }
     pub fn get_sides(&self) -> (Mask, Mask) {
         let i = self.raw.leading_zeros() % 8;
@@ -315,6 +297,66 @@ impl Mask {
         return mask;
     }
 
+    #[cfg(feature = "use_asm")]
+    pub fn of_column(col: usize) -> Mask {
+        use std::arch::asm;
+        let bit = 1u64 << col;
+        let mut o;
+        unsafe {
+            asm!(
+                "mov rcx, 7",
+                "2:",
+                "shl rdx, 8",
+                "or rdx, rax",
+                "loop 2b",
+                in("rax") bit,
+                in("rdx") bit,
+                lateout("rax") _,
+                lateout("rcx") _,
+                lateout("rdx") o,
+            )
+        }
+        return Mask { raw: o };
+    }
+    #[cfg(feature = "use_asm")]
+    pub fn all_rows_above(row: usize) -> Mask {
+        use std::arch::asm;
+        let mut o;
+        unsafe {
+            asm!(
+                "not rax",
+                "2:",
+                "shl rax, 8",
+                "loop 2b",
+                "not rax",
+                in("rax") 0u64,
+                in("rcx") row,
+                lateout("rcx") _,
+                lateout("rax") o
+            );
+        }
+        return Mask {raw: o};
+    }
+    #[cfg(feature = "use_asm")]
+    pub fn all_rows_below(row: usize) -> Mask {
+        use std::arch::asm;
+        let mut o;
+        unsafe {
+            asm!(
+                "add rcx, 1",
+                "not rax",
+                "2:",
+                "shl rax, 8",
+                "loop 2b",
+                in("rax") 0u64,
+                in("rcx") row,
+                lateout("rcx") _,
+                lateout("rax") o
+            );
+        }
+        return Mask {raw: o};
+    }
+    #[cfg(not(feature = "use_asm"))]
     pub fn of_column(col: usize) -> Mask {
         let bit = 1u64 << col;
         let mut mask = Mask { raw: bit };
@@ -324,6 +366,7 @@ impl Mask {
         }
         return mask;
     }
+    #[cfg(not(feature = "use_asm"))]
     pub fn all_rows_above(row: usize) -> Mask {
         let mut array = [0u8; 8];
         for i in 0..row {
@@ -331,6 +374,7 @@ impl Mask {
         }
         return Mask { raw: u64::from_ne_bytes(array) };
     }
+    #[cfg(not(feature = "use_asm"))]
     pub fn all_rows_below(row: usize) -> Mask {
         let mut array = [0b1111_1111u8; 8];
         for i in 0..=row {
@@ -338,6 +382,7 @@ impl Mask {
         }
         return Mask { raw: u64::from_ne_bytes(array) };
     }
+    #[cfg(not(feature = "use_asm"))]
     pub fn all_cols_left(col: usize) -> Mask {
         let mut bit = 0b0000_0000;
         for i in 0..col {
@@ -345,6 +390,7 @@ impl Mask {
         }
         return Mask { raw: u64::from_ne_bytes([bit; 8]) };
     }
+    #[cfg(not(feature = "use_asm"))]
     pub fn all_cols_right(col: usize) -> Mask {
         let mut bit = 0b0000_0000;
         for i in 0..=col {
@@ -352,7 +398,84 @@ impl Mask {
         }
         return Mask { raw:u64::from_ne_bytes([bit; 8]) }.get_not();
     }
+    #[cfg(feature = "use_asm")]
+    pub fn all_cols_right(col: usize) -> Mask {
+        use std::arch::asm;
+        let mut o;
+        unsafe {
+            asm!(
+                "xor rax, rax",
+                "2:",
+                "add rax, 1",
+                "shl rax, 1",
+                "loop 2b",
+                "shr rax, 1",
+                "mov rcx, 8",
+                "3:",
+                "or rdx, rax",
+                "rol rdx, 8",
+                "loop 3b",
+                "not rdx",
+                in("rcx") col + 1,
+                in("rdx") 0u64,
+                lateout("rax") _,
+                lateout("rcx") _,
+                lateout("rdx") o,
+            );
+        }
+        return Mask {raw: o};
+    }
+    #[cfg(feature = "use_asm")]
+    pub fn all_cols_left(col: usize) -> Mask {
+        use std::arch::asm;
+        let mut o;
+        unsafe {
+            asm!(
+                "xor rax, rax",
+                "2:",
+                "add rax, 1",
+                "shl rax, 1",
+                "loop 2b",
+                "shr rax, 1",
+                "mov rcx, 8",
+                "3:",
+                "or rdx, rax",
+                "rol rdx, 8",
+                "loop 3b",
+                in("rcx") col,
+                in("rdx") 0u64,
+                lateout("rax") _,
+                lateout("rcx") _,
+                lateout("rdx") o,
+            );
+        }
+        return Mask {raw: o};
+    }
     
+    #[cfg(feature = "use_asm")]
+    pub fn as_index(&self) -> usize {
+        use std::arch::asm;
+
+        use crate::lib::cutil::pretty_print::pretty_print_mask;
+        let mut o: usize;
+        unsafe {
+            asm!(
+                "2:",
+                "cmp rax, 0x01",
+                "je 3f",
+                "shr rax, 1",
+                "loop 2b",
+                "3:",
+                "mov rax, rcx",
+                in("rax") self.raw,
+                in("rcx") 64,
+                lateout("rcx") _,
+                lateout("rax") o
+            )
+        }
+        return 64 - o;
+    }
+    #[cfg(not(feature = "use_asm"))]
     pub fn as_index(&self) -> usize {
         let bv = &mut self.raw.to_ne_bytes();
         for (index, byte) in bv.iter().enumerate() {

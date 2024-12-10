@@ -1,5 +1,7 @@
 #![feature(unbounded_shifts)]
 #![feature(array_chunks)]
+#![feature(slice_from_ptr_range)]
+#![feature(slice_as_array)]
 pub mod lib {
     pub mod cutil;
     pub mod ui;

@@ -1,3 +1,6 @@
+[features]
+use_asm = []
+
 [package]
 name = "chess"
 version = "0.1.0"
@@ -6,12 +9,9 @@ edition = "2021"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-by_address = "1.2.1"
 crossbeam-channel = "0.5.13"
 eframe = {version = "*"}
 egui_extras = {version = "*", features = ["all_loaders"]}
-num-traits = "0.2.19"
 rand_chacha = "0.3.1"
-rand_distr = "0.4.3"
 stanza = "0.5.1"
 voxell_rng = "0.5.0"

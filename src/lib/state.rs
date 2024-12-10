@@ -170,8 +170,8 @@ impl State {
     }
     pub fn hydrate(&mut self, debug_log: bool){
         if debug_log {
-            pretty_print_board("Hydrating board", &self.board);
-            pretty_print_maskset("Maskset", &self.info.maskset);
+            // pretty_print_board("Hydrating board", &self.board);
+            // pretty_print_maskset("Maskset", &self.info.maskset);
         }
         if let Some(cached) = self.cached_moves.get(&self.info.zkey) {
             self.moves = cached.clone();
@@ -180,7 +180,7 @@ impl State {
             self.cached_moves.insert(self.info.zkey, self.moves.clone());
         }
         if debug_log {
-            pretty_print_masks("Flat moves", &vec![("White", &self.moves.white_flat), ("Black", &self.moves.black_flat)]);
+            // pretty_print_masks("Flat moves", &vec![("White", &self.moves.white_flat), ("Black", &self.moves.black_flat)]);
         }
         let mut zrist = self.zobrist.lock().unwrap();
         zrist.save((self.info.clone(), self.moves.clone(), None));

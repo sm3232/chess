@@ -1,5 +1,6 @@
 
 use eframe::egui;
+use voxell_rng::{prelude::RngCore, slice_methods::SelectRandom};
 use std::{collections::{HashMap, HashSet}, fs::{File, OpenOptions}, io::{Read, Write}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
 use std::thread;
 use crate::lib::{
@@ -11,7 +12,7 @@ use crate::lib::{
     searchtree::SearchTree
 };
 
-use super::{heap::EvaluatedMotion, motion::Motion, searcher::{SearchCheckIn, SearchDriver}, state::State, ui::Input};
+use super::{cutil::{draw::remap_cha, pretty_print::{pretty_print_mask, pretty_print_masks}}, heap::EvaluatedMotion, mask::Mask, motion::Motion, searcher::{SearchCheckIn, SearchDriver}, state::State, ui::Input};
 pub struct VisualInfo {
     pub visual_weights: Option<[i32; 64]>,
     pub cache_saves: Option<usize>,
@@ -69,7 +70,9 @@ pub struct Manager {
     frame: egui::Context,
     worker: Option<JoinHandle<bool>>,
     last_worker_notice: Option<SearchCheckIn>,
-    stable_board: [u8; 64]
+    stable_board: [u8; 64],
+    benchmode: bool,
+    asm: bool
 }
 
 pub struct ManagerPlayer { parity: Parity, searcher: Searcher }
@@ -80,7 +83,7 @@ impl ManagerPlayer {
             parity,
             searcher: Searcher {
                 tree: Vec::new(),
-                time_limit: time::Duration::from_secs_f32(1.0),
+                time_limit: time::Duration::from_secs_f32(3.0),
                 tt: HashMap::new(),
                 driver: SearchDriver::default(),
                 mtm: Motion::default(),
@@ -116,6 +119,21 @@ impl Player for ManagerPlayer {
 
 impl Manager {
     pub fn init(frame: egui::Context, sender: crossbeam_channel::Sender<SharedState>, receiver: crossbeam_channel::Receiver<Input>, init_fen: String, playing_area: f32, info_width: f32) {
+        let asm = if cfg!(feature = "use_asm") {
+            println!("using asm");
+            true
+        } else {
+            println!("NOT using asm");
+            false
+        };
+        // let mut benchmode = true;
+        let mut benchmode = false;
+        for arg in std::env::args() {
+            if arg == "bench" {
+                benchmode = true;
+            }
+        }
+
         let mut mgr = Manager {
             frame,
             game: ChessGame::init(init_fen.to_string()),
@@ -133,7 +151,9 @@ impl Manager {
             worker: None,
             working_channel_recv: None,
             last_worker_notice: None,
-            stable_board: [0u8; 64]
+            stable_board: [0u8; 64],
+            benchmode,
+            asm
         };
         mgr.game.register_players(None, Some(Arc::new(Mutex::new(ManagerPlayer::new(Parity::BLACK)))));
         let tmplock = mgr.game.state.lock().unwrap();
@@ -222,49 +242,82 @@ impl Manager {
                             .write(true)
                             .append(true)
                             .create(true)
-                            .open(format!("{}.txt", last_turn))
+                            .open(format!("bench.{}.txt", if self.asm {"asm"} else { "no_asm" } ))
                             .unwrap();
                         writeln!(file, "{}", last.positions_looked_at).unwrap();
                     }
                 }
                 self.worker = None;
             }
-            let locked = self.game.state.lock().unwrap();
+            let mut locked = self.game.state.lock().unwrap();
             if locked.turn == self.game.human_player || self.game.human_player == Parity::BOTH {
-                let _ = self.sender.send(SharedState {
-                    waiting_for_a_human_input: Some(true),
-                    turn: Some(self.game.human_player),
-                    moves: Some(locked.moves.parity_moves(self.game.human_player)),
-                    selected: Some(self.game.selected),
-                    board: Some(locked.board),
-                    allowed_castles: Some(locked.info.allowed_castles),
-                    working: Some(false),
-                    game_over: Some(false),
-                    visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
-                }).unwrap();
-                match self.receiver.try_recv() {
-                    Ok(x) => {
-                        if x.left {
-                            drop(locked);
-                            self.game.human_input(x.pos.unwrap_or_default(), self.game.human_player);
-                            let locked = self.game.state.lock().unwrap();
-                            let _ = self.sender.send(SharedState {
-                                waiting_for_a_human_input: None,
-                                turn: Some(locked.turn),
-                                moves: Some(locked.moves.parity_moves(locked.turn)),
-                                selected: Some(self.game.selected),
-                                board: Some(locked.board),
-                                allowed_castles: Some(locked.info.allowed_castles),
-                                working: Some(false),
-                                game_over: Some(false),
-                                visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
-                            }).unwrap();
-                            drop(locked);
-                        }
-                    },
-                    n @ Err(crossbeam_channel::TryRecvError::Disconnected) => panic!("{:?}", n),
-                    Err(crossbeam_channel::TryRecvError::Empty) => ()
-                };
+                if self.benchmode {
+                    let _ = self.sender.send(SharedState {
+                        waiting_for_a_human_input: Some(false),
+                        turn: Some(self.game.human_player),
+                        moves: Some(locked.moves.parity_moves(self.game.human_player)),
+                        selected: Some(self.game.selected),
+                        board: Some(locked.board),
+                        allowed_castles: Some(locked.info.allowed_castles),
+                        working: Some(false),
+                        game_over: Some(false),
+                        visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
+                    }).unwrap();
+                    self.frame.request_repaint();
+                    let motions = locked.moves.parity_vect(locked.turn);
+                    if motions.is_empty() {
+                        panic!();
+                    }
+                    locked.make_motion(motions.select_random().as_ref().unwrap().unwrap(), true);
+                    let _ = self.sender.send(SharedState {
+                        waiting_for_a_human_input: Some(false),
+                        turn: Some(self.game.human_player),
+                        moves: Some(locked.moves.parity_moves(self.game.human_player)),
+                        selected: Some(self.game.selected),
+                        board: Some(locked.board),
+                        allowed_castles: Some(locked.info.allowed_castles),
+                        working: Some(false),
+                        game_over: Some(false),
+                        visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
+                    }).unwrap();
+                    drop(locked);
+                    continue;
+                } else {
+                    let _ = self.sender.send(SharedState {
+                        waiting_for_a_human_input: Some(true),
+                        turn: Some(self.game.human_player),
+                        moves: Some(locked.moves.parity_moves(self.game.human_player)),
+                        selected: Some(self.game.selected),
+                        board: Some(locked.board),
+                        allowed_castles: Some(locked.info.allowed_castles),
+                        working: Some(false),
+                        game_over: Some(false),
+                        visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
+                    }).unwrap();
+                    match self.receiver.try_recv() {
+                        Ok(x) => {
+                            if x.left {
+                                drop(locked);
+                                self.game.human_input(x.pos.unwrap_or_default(), self.game.human_player);
+                                let locked = self.game.state.lock().unwrap();
+                                let _ = self.sender.send(SharedState {
+                                    waiting_for_a_human_input: None,
+                                    turn: Some(locked.turn),
+                                    moves: Some(locked.moves.parity_moves(locked.turn)),
+                                    selected: Some(self.game.selected),
+                                    board: Some(locked.board),
+                                    allowed_castles: Some(locked.info.allowed_castles),
+                                    working: Some(false),
+                                    game_over: Some(false),
+                                    visuals: VisualInfo::weight_eval(&self.game.visual_weights, self.current_eval.clone())
+                                }).unwrap();
+                                drop(locked);
+                            }
+                        },
+                        n @ Err(crossbeam_channel::TryRecvError::Disconnected) => panic!("{:?}", n),
+                        Err(crossbeam_channel::TryRecvError::Empty) => ()
+                    };
+                }
                 self.frame.request_repaint();
                 thread::sleep(Duration::from_millis(16));
                 continue;

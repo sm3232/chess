@@ -351,7 +351,7 @@ mod general {
             if (tv & im).any() {
                 break;
             }
-            value += WEIGHT_COMPOUNDING_PASSED[8 - (im.as_index() / 8) - 4];
+            value += WEIGHT_COMPOUNDING_PASSED[8 - (im.as_index() / 8) - 3];
             im = im.get_above();
         }
         return value;

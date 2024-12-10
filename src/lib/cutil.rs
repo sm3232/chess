@@ -1,6 +1,9 @@
 pub mod draw {
     use eframe::egui::{self, Painter};
     use crate::lib::{ chessbyte::ChessByte, heap::EvaluatedMotion, mask::Mask, motion::Motion, piece::{Parity, PieceByte}, point::Point };
+    pub fn remap_cha(v: u64, omax: u64) -> u64 {
+        return u64::MIN + (v - u64::MIN) * (omax - u64::MIN) / (u64::MAX - u64::MIN);
+    }
 
     pub fn visual_weight_remap_table(piece: PieceByte) -> (i32, i32) {
         return match piece {
@@ -154,7 +157,7 @@ pub mod pretty_print {
     use stanza::table::{ Col, Row, Table};
     use crate::lib::chessbyte::ChessByte;
     use crate::lib::eval::Evaluator;
-    use crate::lib::mask::{DepthMask, Mask, ValueMask};
+    use crate::lib::mask::{Mask, ValueMask};
     use crate::lib::maskset::MaskSet;
     use crate::lib::motion::Motion;
 
@@ -229,32 +232,6 @@ pub mod pretty_print {
             return Row::from(cells);
         })).into()
         );
-    }
-    pub fn depth_mask_to_table(m: &DepthMask) -> stanza::table::Table {
-        let bv = &m.raw.to_ne_bytes();
-        return Table::with_styles(
-            Styles::default().with(MinWidth(3)).with(MaxWidth(3)).with(HAlign::Centred)
-        ).with_cols((0..8).map(|_| { Col::new(Styles::default()) }).collect()).with_rows((0..8).map(|i| {
-            let mut cells = Vec::<char>::new();
-            for bit in 0..8 {
-                if bv[i] & (1 << bit) != 0 {
-                    if bv[i + 8] & (1 << bit) != 0 {
-                        cells.push('2');
-                    } else {
-                        cells.push('1');
-                    }
-                } else if bv[i + 8] & (1 << bit) != 0 {
-                    if bv[i] & (1 << bit) != 0 {
-                        cells.push('2');
-                    } else {
-                        cells.push('1');
-                    }
-                } else {
-                    cells.push('0');
-                }
-            }
-            return Row::from(cells);
-        })).into()
     }
     pub fn mask_to_table(m: &Mask) -> stanza::table::Table {
         let bv = &mut m.raw.to_ne_bytes();
