@@ -1,4 +1,4 @@
-use std::{panic, process::{self, Command}, thread};
+use std::{panic, process::{self}};
 
 use chess::lib::ui::ChessApp;
 use eframe::egui;

@@ -1,7 +1,7 @@
 
 use eframe::egui;
 use voxell_rng::slice_methods::SelectRandom;
-use std::{collections::{HashMap, HashSet}, fs::OpenOptions, io::{Read, Write}, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
+use std::{collections::{HashMap, HashSet}, fs::OpenOptions, io::Write, sync::{Arc, Mutex}, thread::JoinHandle, time::{self, Duration}};
 use std::thread;
 use crate::lib::{
     eval::{self, Evaluator}, 

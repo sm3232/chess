@@ -460,20 +460,11 @@ impl Mask {
         let mut o: usize;
         unsafe {
             asm!(
-                "2:",
-                "cmp rax, 0x01",
-                "je 3f",
-                "shr rax, 1",
-                "loop 2b",
-                "3:",
-                "mov rax, rcx",
-                in("rax") self.raw,
-                in("rcx") 64,
-                lateout("rcx") _,
-                lateout("rax") o
+                "bsf rax, rax",
+                inout("rax") mask.raw => o,
             )
         }
-        return 64 - o;
+        return o;
     }
     #[cfg(not(feature = "use_asm"))]
     pub fn as_index(&self) -> usize {
